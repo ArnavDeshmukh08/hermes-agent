@@ -40,15 +40,19 @@ def _default_user_id() -> str | None:
     return None
 
 
-def _build_content(message: str, user_id: str | None) -> str:
-    """Reminder text, optionally prefixed with an @mention."""
+def _mention_prefix(content: str, user_id: str | None) -> str:
+    """Optionally prefix content with an @mention."""
     if user_id:
-        return f"<@{user_id}> ⏰ Hey Arnav — reminder: {message}"
-    return f"⏰ Hey Arnav — reminder: {message}"
+        return f"<@{user_id}> {content}"
+    return content
 
 
-def send_reminder(message: str, *, user_id: str | None = None) -> bool:
-    """Deliver a reminder to Discord.
+def send_message(content: str, *, user_id: str | None = None) -> bool:
+    """POST arbitrary content to the Discord home channel via the bot REST API.
+
+    The generic sender behind every Jack-initiated Discord post (reminders,
+    morning briefings, …). Optionally prefixes an @mention; falls back to the
+    first DISCORD_ALLOWED_USERS id when user_id is None.
 
     Retries once on failure. Returns True on success, False on dry-run (missing
     creds) or after a second failure. Never raises; never logs the token.
@@ -63,7 +67,7 @@ def send_reminder(message: str, *, user_id: str | None = None) -> bool:
         user_id = _default_user_id()
 
     url = f"{_API_BASE}/channels/{channel}/messages"
-    data = json.dumps({"content": _build_content(message, user_id)}).encode("utf-8")
+    data = json.dumps({"content": _mention_prefix(content, user_id)}).encode("utf-8")
     headers = {
         "Authorization": f"Bot {token}",
         "Content-Type": "application/json",
@@ -78,3 +82,12 @@ def send_reminder(message: str, *, user_id: str | None = None) -> bool:
                 # Never include the token or full URL/secret in the log line.
                 print(f"[reminders.notifier] delivery failed: {type(exc).__name__}")
     return False
+
+
+def send_reminder(message: str, *, user_id: str | None = None) -> bool:
+    """Deliver a reminder to Discord.
+
+    Thin wrapper over send_message with the reminder formatting. Behaviour is
+    unchanged: retries once, dry-runs on missing creds, never raises/logs token.
+    """
+    return send_message(f"⏰ Hey Arnav — reminder: {message}", user_id=user_id)

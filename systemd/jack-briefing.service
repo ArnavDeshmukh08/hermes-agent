@@ -1,0 +1,13 @@
+[Unit]
+Description=Jack Morning Briefing
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/hermes/.hermes/hermes-agent/venv/bin/python /home/hermes/.hermes/briefing/morning.py
+WorkingDirectory=/home/hermes/.hermes
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

@@ -41,8 +41,29 @@ _REPLY_TOKENS = int(os.environ.get("JACK_CHAT_REPLY_TOKENS", "400"))
 _OPERATIONAL_MARKER = "### Jack Operational Modules"
 _MODE_B_MARKER = "## Mode B"
 
-_PROFILE_TOKEN_CAP = 600
+_PROFILE_TOKEN_CAP = 2000  # living USER.md grows as Jack learns; keep room (still tiny vs the 10k budget)
 _PERSONALITY_TOKEN_CAP = 1200
+
+# A memory-query asks Jack what he knows/remembers about Arnav. These must read
+# USER.md FRESH from disk (the cached self._profile is stale once the background
+# MemoryUpdater appends new facts), then summarize it naturally.
+_MEMORY_QUERY_RE = re.compile(
+    r"\b(?:"
+    r"what do you (?:remember|know) about me"
+    r"|what do you have on me"
+    r"|what(?:'s| is) in your memory"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_MEMORY_SUMMARY_GUIDANCE = (
+    "Below is everything you remember about Arnav (your living memory of him). "
+    "Summarize it back to him naturally, the way a close friend who knows him "
+    "would — warm, in your own words, grouped sensibly (who he is, his people, "
+    "his work, what he's into). Do NOT dump the raw notes or headers, don't list "
+    "every line robotically, and don't invent anything that isn't here. A few "
+    "tight paragraphs or a short grouped rundown is perfect."
+)
 
 _FALLBACK_PERSONALITY = (
     "You are Jack, a sharp, friendly personal Chief of Staff for Arnav Deshmukh, "
@@ -79,6 +100,12 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, len(text) // 4)
+
+
+def _memory_enabled() -> bool:
+    """Background learning is on unless JACK_MEMORY_ENABLED is explicitly falsy."""
+    val = os.environ.get("JACK_MEMORY_ENABLED", "1").strip().lower()
+    return val in {"1", "true", "yes", "on"}
 
 
 def _resolve_provider() -> tuple[str, int]:
@@ -147,8 +174,10 @@ class JackConversationHandler:
         self._max_turns = max_turns if max_turns is not None else resolved_turns
         self._budget = token_budget
         self._personality = self._load_personality(soul_path)
+        self._user_path = Path(user_path)
         self._profile = self._load_profile(user_path)
         self._sessions: dict[str, list[dict[str, str]]] = {}
+        self._memory = None  # lazy MemoryUpdater (built on first use)
 
     # -- loading (cached at construction) ------------------------------------
     @staticmethod
@@ -216,10 +245,73 @@ class JackConversationHandler:
         system, user_block = self.build_prompt(user_message, user_id)
         return estimate_tokens(system) + estimate_tokens(user_block)
 
+    # -- memory ---------------------------------------------------------------
+    def _memory_updater(self):
+        """Lazy singleton MemoryUpdater pointed at the same USER.md this handler
+        reads. Returns None if the package can't be imported (degrade silently)."""
+        if self._memory is None:
+            try:
+                from jack_memory.updater import MemoryUpdater
+
+                self._memory = MemoryUpdater(user_path=self._user_path)
+            except Exception:  # noqa: BLE001 - memory is optional; never block chat
+                self._memory = False  # sentinel: import failed, don't retry endlessly
+        return self._memory or None
+
+    def _fire_memory_update(
+        self, history: list[dict[str, str]], user_message: str, reply: str
+    ) -> None:
+        """Fire-and-forget the background learning extraction. Must never delay or
+        crash respond(): if there's no running loop or memory is disabled, skip."""
+        if not _memory_enabled():
+            return
+        updater = self._memory_updater()
+        if updater is None:
+            return
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(updater.run_async(history, user_message, reply))
+        except Exception:  # noqa: BLE001 - no loop / scheduling error → harmless skip
+            return
+
+    async def _answer_memory_query(self, user_message: str) -> str:
+        """Read USER.md FRESH from disk (not the cached profile) and ask Jack to
+        summarize it like a friend. Falls back to the error reply on failure."""
+        try:
+            memory = self._user_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            memory = ""
+        if not memory:
+            return "I don't have anything in my memory about you yet."
+        system = "\n\n".join(
+            [self._personality, "# How to behave right now\n" + _MEMORY_SUMMARY_GUIDANCE]
+        )
+        user_block = memory + "\n\nArnav: " + user_message + "\nJack:"
+        prefer, _ = _resolve_provider()
+        try:
+            from lib import llm
+
+            reply = await asyncio.to_thread(
+                llm.complete,
+                system,
+                user_block,
+                prefer=prefer,
+                max_tokens=_REPLY_TOKENS,
+            )
+            reply = (reply or "").strip()
+        except Exception:  # noqa: BLE001 - degrade gracefully
+            return _ERROR_REPLY
+        return reply or _ERROR_REPLY
+
     # -- response -------------------------------------------------------------
     async def respond(self, user_message: str, user_id: str) -> str:
         """Build a lean prompt, call lib.llm (off-thread — it's blocking), record
-        the exchange, and return Jack's reply. Never raises to the caller."""
+        the exchange, fire a background memory update, and return Jack's reply.
+        Never raises to the caller."""
+        # Memory-query path: read live USER.md and summarize, bypassing chat.
+        if _MEMORY_QUERY_RE.search(user_message or ""):
+            return await self._answer_memory_query(user_message)
+
         system, user_block = self.build_prompt(user_message, user_id)
         prefer, _ = _resolve_provider()
         try:
@@ -237,6 +329,10 @@ class JackConversationHandler:
             return _ERROR_REPLY
         if not reply:
             return _ERROR_REPLY
+        # Snapshot history BEFORE recording this turn so the extractor sees the
+        # prior exchange as context and the current turn explicitly.
+        prior_history = self.get_context(user_id)
         self.add_turn(user_id, "user", user_message)
         self.add_turn(user_id, "assistant", reply)
+        self._fire_memory_update(prior_history, user_message, reply)
         return reply
