@@ -1,0 +1,19 @@
+# Ruff config for Hermes Agent.
+# Target the runtime Python on the box (3.9). stdlib-first codebase.
+target-version = "py39"
+line-length = 110
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",  # long lines tolerated in prompts/docstrings
+    "B008",  # default-arg calls are deliberate in a few helpers
+    "SIM105",  # try/except/pass is clearer than contextlib.suppress in places
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402"]  # sys.path insert before imports is the test convention
+"bin/*" = ["E402"]
+
+[lint.isort]
+known-first-party = ["lib", "worker"]

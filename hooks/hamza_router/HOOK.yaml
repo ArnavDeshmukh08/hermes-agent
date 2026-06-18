@@ -1,0 +1,10 @@
+name: hamza_router
+description: >
+  Intent router in front of Hamza. On gateway startup it wraps the Discord
+  adapter's _handle_message so operational messages (lead-gen, status) bypass the
+  heavy agent loop (which 413s at ~29.6k tokens vs Groq's 12k TPM) and dispatch
+  straight to the validated worker system. Unknown messages fall through to the
+  normal conversational agent path. Zero edits to framework files.
+events:
+  - gateway:startup
+  - session:start

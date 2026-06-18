@@ -1,0 +1,28 @@
+# NEVER commit secrets
+secrets/
+credentials.json
+credentials.md
+*.env
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+venv/
+.venv/
+
+# Personal data & generated artifacts (kept local, not versioned)
+memory/
+tasks/
+out/
+reports/
+.backups/
+
+# OS
+.DS_Store
+node_modules/
