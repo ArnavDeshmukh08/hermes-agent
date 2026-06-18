@@ -1,6 +1,6 @@
 """Hermes Prime — event-driven lead-generation worker system.
 
-Turns the Hamza lead pipeline from a single script into an event-driven worker
+Turns the Vytal lead pipeline from a single script into an event-driven worker
 system: Hermes Prime creates a task, spawns concurrent workers (Discovery,
 Research, Social, Outreach, Validation), monitors a filesystem task queue,
 aggregates results into a dynamic-column spreadsheet, and emits `task_complete`
