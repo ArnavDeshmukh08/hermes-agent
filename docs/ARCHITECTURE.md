@@ -18,7 +18,7 @@
 ## The three execution paths
 ```
                          ┌──────────────────────────────────────────────┐
-  Telegram (Jack/Hamza)  │  INTERACTIVE PATH                             │
+  Telegram (Jack)        │  INTERACTIVE PATH                             │
   ───────────────────────►  hermes-gateway → agent loop                 │
                          │   context = base + persona + LEAN skills(+memory)  ◄─ < 12k
                          │   primary: Groq 70B   ↘ fallback: local 8B    │
@@ -39,8 +39,8 @@
 ## Layers
 
 ### Agents (operating + product roles)
-The product personas (Jack, Hamza) live in `SOUL.md` on the box. The **operating**
-agents — used by Claude Code to build/run/debug Hermes — live in `.claude/agents/`:
+The product persona (a single **Jack**, across both surfaces) lives in `SOUL.md` on the box.
+The **operating** agents — used by Claude Code to build/run/debug Hermes — live in `.claude/agents/`:
 `architect`, `debugger`, `infrastructure`, `memory-manager`, `dispatcher`,
 `outreach-manager`. One responsibility each, no overlap (see each file's header).
 
@@ -57,7 +57,7 @@ agents — used by Claude Code to build/run/debug Hermes — live in `.claude/ag
 2. **Profile/preferences** — `USER.md` + memory store; learns Arnav's preferences;
    asks early to learn faster.
 3. **Task state** — `kanban.db` (auto-decompose, dispatcher).
-4. **Durable knowledge** — idea vault / lead+bug DB (Hamza), curated periodically by the
+4. **Durable knowledge** — idea vault / lead+bug DB (Vytal), curated periodically by the
    built-in curator.
 A `memory-manager` operating agent owns compaction, archival, and growth limits.
 
@@ -86,7 +86,7 @@ not tools. Side-effecting tools (sends, email, posts) stay approval-gated.
 | Voice (Jarvis) | Interactive | `stt: groq` (Whisper) + `tts: edge` — cloud, re-scoped | re-scope, likely cheaper than local |
 | Dev-team dispatcher | Heavy | built-in `delegation` orchestrator → spec → subagents → review | foundation exists |
 | Outreach engine | Heavy + approval | `hamza_orchestrator` scripts → local Ollama; sends gated | scaffolded, paused |
-| Startup chief-of-staff | Interactive + Task | Hamza persona + kanban | live |
+| Startup chief-of-staff | Interactive + Task | Jack (Vytal group) + kanban | live |
 
 ## Non-goals
 - No fork of `hermes-agent` internals (that's Option C, rejected).

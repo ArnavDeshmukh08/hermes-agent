@@ -16,7 +16,7 @@ counterpart that fixes a *given* symptom is `debugger`.
 1. **Sweep logs** — `~/.hermes/logs/{agent,gateway,errors}.log` for recurring warnings,
    413s, resets, silent retries, swallowed errors.
 2. **Audit config** — `config.yaml` for unset `max_tokens`/`base_url`, provider/`.env`
-   conflicts, oversized always-on context, stale IDs (e.g. Hamza group).
+   conflicts, oversized always-on context, stale IDs (e.g. the Vytal group).
 3. **Scan source/scripts** — `~/.hermes/hermes-agent/` and box scripts for fragile paths:
    unhandled errors, missing approval gates on side-effects, hardcoded secrets, OOM risks
    (3.7 GB / no swap), growth loops (memory re-persist).

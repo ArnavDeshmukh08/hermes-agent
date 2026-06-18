@@ -33,7 +33,7 @@ in `decisions.jsonl`.**
                        │   ~/.hermes/bin/cmo.py                  ──writes──►   memory/content/<id>.json             │
                        │   • reads NEW findings (since cursor)                  {Content draft, status:"pending"}    │
                        │   • lean direct LLM call → variants[]                        │                             │
-                       │   • persona from SOUL.md (Hamza/Jack)                        │                             │
+                       │   • persona from SOUL.md (Jack, scoped by surface)          │                             │
                        │           │ chained (same cron, step 3)                      │                             │
                        │           ▼                                                  ▼                             │
                        │   ~/.hermes/bin/dispatch.py            ──reads──►   pending drafts not yet dispatched       │

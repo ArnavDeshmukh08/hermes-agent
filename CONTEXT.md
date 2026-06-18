@@ -10,7 +10,18 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-18. (**Intent Router** live: a user-space hook
+> Last meaningful update: 2026-06-18. (**Hamza → Jack unification (in progress).** The two-persona
+> model (Jack in DMs / Hamza in the Vytal group) is retired in favour of **one unified `Jack`
+> persona on both surfaces**. Lead-router code renamed `hooks/hamza_router/` → `hooks/jack_router/`
+> (module `jack_intent_router.py`, env `JACK_WORKER_ROOT`/`JACK_ROUTER_MAX_CONCURRENT`, worker-path
+> target `~/.hermes/jack_worker`, sheet tab `Jack_Leads`, log `[jack_router]`, Discord trigger
+> `@Jack`); 13 intent tests pass. **Local repo + git baseline done; live-VPS cutover NOT executed** —
+> still pending: rename `~/.hermes/{hamza_worker,hooks/hamza_router}`, edit `config.yaml`+`SOUL.md`
+> to the single Jack persona, switch the live `@Hamza` trigger, rename the `Hamza_Leads` sheet tab
+> (see the cutover checklist). Historical reports/logs keep the "Hamza" name as a factual record.
+> Prior entries below.)
+>
+> Earlier 2026-06-18: (**Intent Router** live: a user-space hook
 > `~/.hermes/hooks/hamza_router/` wraps the Discord adapter's `_handle_message` (zero framework-file
 > edits) so operational messages — `find/scrape leads`, `status`, `outreach for row N` — bypass the
 > 29.6k-token agent loop and run the `worker/` in-process, replying via the live bot. Conversational
@@ -87,7 +98,7 @@ real — zero fake/placeholder contacts.
 - **Key paths on the box:**
   - `~/.hermes/config.yaml` — main config (providers, telegram, agent, auxiliary, cron…)
   - `~/.hermes/.env` — API keys (loaded via python-dotenv)
-  - `~/.hermes/SOUL.md` — persona/behavior directives (the Jack/Hamza identities)
+  - `~/.hermes/SOUL.md` — persona/behavior directives (the **Jack** identity; formerly a Jack/Hamza split, now unified — see §7)
   - `~/.hermes/USER.md` — Arnav's profile, tone rules, data guardrails
   - `~/.hermes/state.db` (memory/sessions), `kanban.db` (tasks), `memories/`, `sessions/`
   - `~/.hermes/skills/` — installed skill packs; `~/.hermes/bin/` — Arnav's custom scripts
@@ -122,15 +133,17 @@ Historical note: the original failure that kicked off this project was a dead br
 (404 on every call), compounded by a missing `model.base_url`. Fixed. The assistant had *looked*
 like "Telegram is broken" but Telegram was fine the whole time.
 
-## 7. The dual identity + custom capabilities
-`SOUL.md` defines two personas the agent switches between by context:
-- **Jack** — personal Chief of Staff. Active in **Arnav's DMs**. Modules: Idea Vault (saves ideas
-  to memory/files), Travel concierge, Social engine (LinkedIn/X posting scripts), native image
-  generation, **Reminders** (uses `remind.py`, see §8).
-- **Hamza** — Vytal Operations Manager. Active in the **"Vytal" Telegram group**
-  (`-1003797274797`). Bosses: Arnav (technical) + Spandan (marketing). Modules: lead/bug database
-  (appends to `vytal_leads.md`/`vytal_bugs.md`), meeting secretary, growth engine (cold-email
-  drafting, scraping), stealth web scraping.
+## 7. Identity + custom capabilities
+`SOUL.md` defines a **single persona — Jack** — operating across both surfaces. Behaviour is still
+scoped by surface, but it is one identity, not two. *(Historical note: this was formerly a
+two-persona split — **Jack** in DMs and **Hamza** as the Vytal ops manager — retired and unified on
+2026-06-18. Older reports/logs keep the "Hamza" name as a factual record.)*
+- **As Chief of Staff — Arnav's DMs:** Idea Vault (saves ideas to memory/files), Travel concierge,
+  Social engine (LinkedIn/X posting scripts), native image generation, **Reminders** (uses
+  `remind.py`, see §8).
+- **As Vytal Operations Manager — the "Vytal" Telegram group** (`-1003797274797`): bosses Arnav
+  (technical) + Spandan (marketing); lead/bug database (appends to `vytal_leads.md`/`vytal_bugs.md`),
+  meeting secretary, growth engine (cold-email drafting, scraping), stealth web scraping.
 
 **Custom scripts** in `~/.hermes/bin/` (invoked by the agent via its terminal tool): a Vytal
 outreach pipeline (`hamza_orchestrator.py`, `stealth_scrape.py` (camoufox stealth browser),
@@ -180,7 +193,8 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 - ⏸ Heavy agentic cron jobs ("Learning Engine", "Daily AI Social Drafts") — paused; their last
   recorded error was a pre-fix Google-404, and they would 413 on Groq. Route to local Ollama via
   per-job override / `no_agent` (`skills/cron-router`).
-- ⚠️ SOUL.md still binds Hamza to group `-5439847434`; live group is `-1003797274797` — confirm + fix.
+- ⚠️ Live SOUL.md still defines the legacy **Hamza** group persona bound to stale group
+  `-5439847434` (live group is `-1003797274797`). The cutover unifies it to **Jack** and fixes the group ID.
 
 **Built locally, offline-validated (NOT yet on the VPS):**
 - 🟢 **Lead Engine — event-driven worker system** (`worker/` + `bin/leadgen.py`). Hermes Prime

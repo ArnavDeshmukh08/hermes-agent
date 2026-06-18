@@ -1,6 +1,6 @@
 # Agent: Outreach Manager
 
-**Responsibility:** Vytal lead-finding and message drafting (the Hamza outreach engine) —
+**Responsibility:** Vytal lead-finding and message drafting (the Jack outreach engine) —
 generation runs off the free tier, **every send is approval-gated**, and all activity is
 compliance-aware. Owns outreach; not general dispatch (`dispatcher`).
 

@@ -18,7 +18,7 @@ consistency & non-overlap. Owns system-fit review; not code correctness
 - **Non-overlap:** no duplicate responsibility vs. the existing agent roster; boundaries in
   the new file's header match reality.
 - **Consistency:** aligns with `CONTEXT.md`/`MEMORY.md`/`docs/*`; relative-path references
-  resolve; no stale IDs (e.g. Hamza group `-1003797274797`).
+  resolve; no stale IDs (e.g. the Vytal group `-1003797274797`).
 
 ## Method (read-only)
 1. Read the change + the neighbors/configs/docs it touches.

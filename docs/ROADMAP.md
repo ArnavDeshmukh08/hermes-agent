@@ -14,7 +14,7 @@ reply, request size < 12k.
    - Validate: re-send `het`; confirm log shows `Requested < 12000` and a real reply.
 2. **Single-source + rotate the Groq key** — remove from one of config/`.env`; rotate.
 3. **Confirm provider routing** honors explicit `model.provider` (re-test after key work).
-4. **Fix Hamza's group ID in SOUL.md** (text says `-5439847434`; live group is
+4. **Fix the Vytal group ID in SOUL.md** (text says `-5439847434`; live group is
    `-1003797274797`) — confirm with Arnav first.
 5. **Prune `.env`** (487 lines) to real, used keys; ensure none reach prompts/logs.
 

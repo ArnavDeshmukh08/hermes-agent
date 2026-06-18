@@ -18,7 +18,7 @@ finding latent bugs (`bug-hunter`), not root-causing a failure (`debugger`).
 - **Interactive turn:** send a real Telegram message (e.g. `het`); confirm a real reply,
   no `413 Requested >12000`, no `Auto-resetting session` in `agent.log`.
 - **`no_agent` / deterministic job:** fires on schedule, zero LLM call, delivers to the
-  right chat (Jack vs Hamza group).
+  right chat (Jack in DMs vs Jack in the Vytal group).
 - **Heavy/per-job override:** routes to local Ollama (not Groq); completes; result delivered.
 
 ## Method

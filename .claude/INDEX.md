@@ -26,7 +26,7 @@
 |---|---|---|
 | Architecture | [agents/architect.md](agents/architect.md) | system shape, context budget, routing decisions |
 | Backend | [agents/backend.md](agents/backend.md) | framework/config/provider routing, cron wiring, gateway runtime |
-| Frontend → Interface | [agents/interface.md](agents/interface.md) | Telegram UX, Jack/Hamza persona design, voice (stt:groq/tts:edge) |
+| Frontend → Interface | [agents/interface.md](agents/interface.md) | Telegram UX, Jack persona design (DMs + Vytal group), voice (stt:groq/tts:edge) |
 | Database → Memory | [agents/memory-manager.md](agents/memory-manager.md) | state.db/kanban.db/memory store, retention, compaction |
 | DevOps → Infra | [agents/infrastructure.md](agents/infrastructure.md) | VPS, systemd, Mac↔VPS tunnel, swap, backups, SSH |
 | (Hermes-specific) | [agents/dispatcher.md](agents/dispatcher.md) | idea→spec→route→dispatch (dev-team dispatcher foundation) |

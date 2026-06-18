@@ -4,7 +4,7 @@
 report. Wraps the `bug-fixer` skill + `debugger` agent.
 
 ## Usage
-`/bug <symptom>` — e.g. `/bug Hamza stopped replying in the Vytal group`, or paste an
+`/bug <symptom>` — e.g. `/bug Jack stopped replying in the Vytal group`, or paste an
 error / screenshot / log excerpt.
 
 ## What it does

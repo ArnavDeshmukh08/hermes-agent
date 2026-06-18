@@ -8,9 +8,9 @@ not overflow (`context-compressor`).
 - Transport: Telegram **polling** via `hermes-gateway.service`.
 - `telegram.allowed_chats` includes the Vytal group `-1003797274797` and Arnav's DM
   IDs ✅.
-- Personas: **Jack** (DMs) / **Hamza** (Vytal group) from `SOUL.md`. Note: SOUL.md text
-  references group `-5439847434` while the live group is `-1003797274797` — a persona
-  routing mismatch to confirm with Arnav (ROADMAP Phase 0).
+- Persona: a single **Jack** across both surfaces — DMs and the Vytal group — from `SOUL.md`.
+  Note: SOUL.md text references group `-5439847434` while the live group is `-1003797274797` —
+  a surface routing mismatch to confirm with Arnav (ROADMAP Phase 0).
 - Streaming enabled for Telegram (`display.platforms.telegram.streaming: true`).
 
 ## Symptom → check

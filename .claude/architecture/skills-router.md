@@ -32,13 +32,13 @@ is small. No bespoke router is built; we configure the one that exists. (Realize
   Telegram msg
      │
      ▼
-  ① Dispatcher — classify intent + persona
-     │   persona = chat type (DM→Jack, Vytal group→Hamza)
+  ① Dispatcher — classify intent + surface
+     │   surface = chat type (DM or Vytal group → Jack on both)
      │   intent  = keyword/embedding match against registry trigger keywords
      ▼
   ② Skills Router — tool_search over the registry
      │   retrieve top-K (K=3–5) skills above threshold (10%) by name/desc/keywords
-     │   drop the 5 macOS-only skills; bias by persona context
+     │   drop the 5 macOS-only skills; bias by surface context
      ▼
   ③ Load — always-load core (KEEP) + matched on-demand skills only
      │   core = kanban-orchestrator, kanban-worker, hermes-agent (~0.2k tok)
@@ -64,18 +64,18 @@ is small. No bespoke router is built; we configure the one that exists. (Realize
 3. **Disable ARCHIVE packs** — remove the 32 off-surface skills from the installed/index set
    (re-installable; nothing deleted) so retrieval space is small. **This is the main lever** —
    the savings come from surface-relevance pruning, not platform.
-4. **Persona scoping** — load only the active persona's `SOUL.md` section (DM→Jack, group→Hamza).
+4. **Surface scoping** — load only the active surface's `SOUL.md` section (Jack in DMs vs Jack in the Vytal group).
 5. **Platform filter (minor)** — exclude the 5 macOS-only `apple` skills on the Linux gateway.
 
 ## Intent → skill-group map (dispatcher hints)
-| Intent signal | Persona | Candidate skills |
+| Intent signal | Surface | Candidate skills |
 |---|---|---|
-| booking / appointment / clinic / lead / Vytal | Hamza | kanban, (outreach via `~/.hermes/bin` scripts) |
-| remind / note / idea / schedule | Jack | reminders (script), kanban |
+| booking / appointment / clinic / lead / Vytal | Jack (Vytal group) | kanban, (outreach via `~/.hermes/bin` scripts) |
+| remind / note / idea / schedule | Jack (DMs) | reminders (script), kanban |
 | research / paper / market | either | arxiv, blogwatcher, llm-wiki, polymarket |
 | code / PR / repo / debug / deploy | dev-dispatch | github (merged), debugging (merged), plan, tdd |
 | docs / sheet / pdf / ocr | either | google-workspace, notion, airtable, ocr-and-documents |
-| (no match) | active persona | P0 core only |
+| (no match) | active surface | P0 core only |
 
 ## Constraints / non-goals
 - **No new code/agents/skills** — configure the framework's existing `tool_search`.
@@ -88,7 +88,7 @@ is small. No bespoke router is built; we configure the one that exists. (Realize
 - [ ] A skill-triggering message loads only the matched skill(s) + core, not all 73.
 - [ ] Always-loaded skills overhead < 1k tok; typical turn < 8k tok.
 - [ ] Archived packs are disabled, re-installable, and absent from the on-demand index.
-- [ ] No persona cross-load (Jack content absent in a Hamza turn and vice-versa).
+- [ ] No surface cross-load (DM-only `SOUL.md` content absent in a Vytal-group turn and vice-versa).
 
 ## Validation
 Per `skills/skills-pruner.md` + `/deploy`: back up → apply on the box → restart →
