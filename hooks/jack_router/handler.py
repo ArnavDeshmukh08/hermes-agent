@@ -1,4 +1,4 @@
-"""Hamza intent-router hook.
+"""Jack intent-router hook.
 
 On `gateway:startup` (and `session:start` as a fallback) this wraps the live
 Discord adapter's `_handle_message` so operational messages bypass the 29.6k-token
@@ -7,7 +7,7 @@ agent loop and dispatch straight to the worker. Everything lives in user space
 can't silently wipe it (the hook reinstalls on next startup).
 
 Flow for an operational message:
-  @Hamza find 100 psychiatry clinics in India
+  @Jack find 100 psychiatry clinics in India
     → classify() → Route("lead", {...})
     → reply "on it · task <id>" via the LIVE bot (same channel)
     → background task runs the worker (bounded by a semaphore; blocking I/O via
@@ -28,17 +28,17 @@ import sys
 from pathlib import Path
 
 HOOK_DIR = Path(__file__).resolve().parent
-WORKER_ROOT = Path(os.environ.get("HAMZA_WORKER_ROOT", "/home/hermes/.hermes/hamza_worker"))
+WORKER_ROOT = Path(os.environ.get("JACK_WORKER_ROOT", "/home/hermes/.hermes/jack_worker"))
 for _p in (str(HOOK_DIR), str(WORKER_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import hamza_intent_router as router  # noqa: E402 - after sys.path setup above
+import jack_intent_router as router  # noqa: E402 - after sys.path setup above
 
 _PATCHED = False
 _MENTION_RE = re.compile(r"<@[!&]?\d+>")
 _LEAD_COLUMNS = ["Clinic Name", "City", "Phone", "Website"]
-_SHEET_TAB = "Hamza_Leads"
+_SHEET_TAB = "Jack_Leads"
 _PITCH_COL = "Personalized Pitch"
 
 # Strong refs so fire-and-forget tasks aren't GC-cancelled mid-run.
@@ -47,13 +47,13 @@ _SEM = None  # lazy, created on the running loop
 
 
 def _log(msg: str) -> None:
-    print(f"[hamza_router] {msg}", flush=True)
+    print(f"[jack_router] {msg}", flush=True)
 
 
 def _sem() -> asyncio.Semaphore:
     global _SEM
     if _SEM is None:
-        _SEM = asyncio.Semaphore(int(os.environ.get("HAMZA_ROUTER_MAX_CONCURRENT", "2")))
+        _SEM = asyncio.Semaphore(int(os.environ.get("JACK_ROUTER_MAX_CONCURRENT", "2")))
     return _SEM
 
 
@@ -93,12 +93,12 @@ async def handle(event_type, context=None):  # noqa: ARG001 - framework hook sig
         except Exception:  # noqa: BLE001
             pass
         return
-    if getattr(cls, "_hamza_orig_handle_message", None) is not None:
+    if getattr(cls, "_jack_orig_handle_message", None) is not None:
         _PATCHED = True
         return
 
     orig = cls._handle_message
-    cls._hamza_orig_handle_message = orig
+    cls._jack_orig_handle_message = orig
 
     async def _routed_handle_message(self, message, *args, **kwargs):
         # Signature-agnostic: pass through whatever the framework calls with, so a

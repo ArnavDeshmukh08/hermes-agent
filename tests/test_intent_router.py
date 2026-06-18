@@ -4,9 +4,9 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "hamza_router"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "jack_router"))
 
-import hamza_intent_router as router  # noqa: E402
+import jack_intent_router as router  # noqa: E402
 
 
 class ClassifyTest(unittest.TestCase):
