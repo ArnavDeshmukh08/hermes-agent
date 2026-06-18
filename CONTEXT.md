@@ -19,11 +19,17 @@
 > `~/.hermes/jack_cutover_bak_20260618_090941/`. ⚠️ One manual step left: rename the Discord **bot
 > display name** `@Hamza`→`@Jack` in the Discord portal (not SSH-able). Legacy `hamza_orchestrator.py`
 > + historical reports keep the "Hamza" name on purpose.
-> **413 chat MITIGATED (lite chat):** conversational turns 413'd (Groq free 12k TPM < ~29.6k per
-> turn). Fix: `max_tokens` 8192→1024 + gated telegram/discord chat to **memory-only** (dropped a real
-> turn 29,625→fits). Fresh chat now replies; long sessions still auto-reset. Routing a model to the
-> local 8B was tried + reverted (too slow on a 30k prompt). Terminal-based chat caps (reminders,
-> image-gen, social) now OFF in chat → planned as deterministic Discord **router intents** next.
+> **413 chat FIXED — Jack conversation brain (`hooks/jack_router/conversation.py`).** The
+> framework agent loop is now **fully bypassed for Discord**: `jack_router.classify()` returns
+> `conversational` for anything non-operational (never `None`), and a lean handler answers directly —
+> personality from `SOUL.md` (operational tool blocks stripped), profile from `USER.md`, 6-turn
+> sliding window, ~10k token budget, calls `lib/llm.py` (`prefer=groq`, `max_tokens=400`) off-thread.
+> **Live-verified on the box: a real turn is ~632 tokens (vs 29.6k) and Groq replies correctly with
+> Arnav's name/startups — no 413.** Provider/history switchable via **`JACK_CHAT_PROVIDER`** in `.env`
+> (`groq` free | `paid_groq` 20-turn no-cap | `ollama` local) — the paid-tier upgrade is one env value.
+> 87 tests pass. `reminder` intent added as a stub; image-gen + social + a durable Discord reminder
+> scheduler are the next router intents. *(Earlier same-day stopgap — `max_tokens`→1024 + memory-only
+> tool gating — is now superseded but left in place as a harmless safety net.)*
 > Prior entries below.)
 >
 > Earlier 2026-06-18: (**Intent Router** live: a user-space hook
