@@ -29,7 +29,8 @@ from pathlib import Path
 
 HOOK_DIR = Path(__file__).resolve().parent
 WORKER_ROOT = Path(os.environ.get("JACK_WORKER_ROOT", "/home/hermes/.hermes/jack_worker"))
-for _p in (str(HOOK_DIR), str(WORKER_ROOT)):
+HERMES_ROOT = HOOK_DIR.parents[1]  # ~/.hermes on the box (repo root locally) — for `import reminders`
+for _p in (str(HOOK_DIR), str(WORKER_ROOT), str(HERMES_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -152,6 +153,108 @@ async def _run_conversation(message, route) -> None:
         _log(f"conversation failed: {e!r}")
 
 
+_STORE = None
+
+
+def _store():
+    """Lazy singleton ReminderStore (shares the JSON file with the scheduler service)."""
+    global _STORE
+    if _STORE is None:
+        from reminders.store import ReminderStore
+
+        _STORE = ReminderStore()
+    return _STORE
+
+
+def _fmt_ist(value) -> str:
+    """Render a stored UTC time as friendly IST, e.g. '9:00 AM IST, Thu Jun 19'."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%-I:%M %p IST, %a %b %-d")
+
+
+_REMINDER_TRIGGER_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:remind me(?:\s+to|\s+about|\s+that)?|"
+    r"reminder\s+(?:for|to|about)|don'?t let me forget(?:\s+to|\s+about)?|"
+    r"set(?:\s+up)?\s+an?\s+(?:alarm|reminder)(?:\s+to|\s+for|\s+about)?|"
+    r"alert me(?:\s+to|\s+when|\s+about|\s+that|\s+if)?)\s+",
+    re.IGNORECASE,
+)
+_TIME_TAIL_RE = re.compile(
+    r"\s+(?:at|by|on|in|every|this|tonight|tomorrow|today|next)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _reminder_message(text: str) -> str:
+    """Extract the task: 'remind me to call mom at 9am tomorrow' -> 'call mom'."""
+    t = _REMINDER_TRIGGER_RE.sub("", text.strip())
+    t = _TIME_TAIL_RE.sub("", t).strip(" .,!?")
+    return t or text.strip()
+
+
+def _match_reminder(text: str, items: list):
+    """Pick the pending reminder a cancel request refers to (word overlap)."""
+    t = text.lower()
+    best, score = None, 0
+    for r in items:
+        words = [w for w in re.findall(r"\w+", r["message"].lower()) if len(w) > 2]
+        s = sum(1 for w in words if w in t)
+        if s > score:
+            best, score = r, s
+    if best:
+        return best
+    return items[0] if len(items) == 1 else None
+
+
+async def _run_reminder(message, route) -> None:
+    """Set / list / cancel reminders against the live store — no agent loop."""
+    channel = message.channel
+    action = route.params.get("action", "set")
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+    user_id = str(getattr(getattr(message, "author", None), "id", "") or "anon")
+    try:
+        if action == "list":
+            items = await asyncio.to_thread(_store().list_pending, user_id)
+            if not items:
+                await channel.send("📭 No reminders set.")
+                return
+            lines = [
+                f"• {r['message']} — {_fmt_ist(r['fire_at'])}" + (" · recurring" if r.get("recurring") else "")
+                for r in items
+            ]
+            await channel.send("⏰ Your reminders:\n" + "\n".join(lines))
+            return
+        if action == "cancel":
+            items = await asyncio.to_thread(_store().list_pending, user_id)
+            target = _match_reminder(text, items)
+            if not target:
+                await channel.send("Which one? Try `what reminders do I have`, then `cancel the <name> reminder`.")
+                return
+            ok = await asyncio.to_thread(_store().cancel, target["id"], user_id)
+            await channel.send(f"🗑️ Cancelled: {target['message']}" if ok else "Couldn't cancel that one.")
+            return
+        # set
+        from reminders import parser as rparser
+
+        msg = _reminder_message(text)
+        try:
+            parsed = await asyncio.to_thread(rparser.parse_time, text)
+        except ValueError as e:
+            await channel.send(f"⏰ {e}")
+            return
+        await asyncio.to_thread(_store().add, user_id, msg, parsed.fire_at, parsed.recurring)
+        suffix = " · recurring" if parsed.recurring else ""
+        await channel.send(f"Got it ⏰ I'll remind you to {msg} at {_fmt_ist(parsed.fire_at)}{suffix}")
+    except Exception as e:  # noqa: BLE001 - never crash the gateway on a reminder
+        await channel.send("⚠️ Reminder system hiccup — try that again?")
+        _log(f"reminder failed: {e!r}")
+
+
 async def _dispatch(adapter, message, route) -> None:
     channel = message.channel
     if route.intent == "status":
@@ -161,10 +264,7 @@ async def _dispatch(adapter, message, route) -> None:
         _fire(_run_conversation(message, route))
         return
     if route.intent == "reminder":
-        await channel.send(
-            "⏰ Got it — but full reminder scheduling isn't wired up yet (coming soon). "
-            "I can't set it automatically right now."
-        )
+        _fire(_run_reminder(message, route))
         return
     if route.intent == "lead":
         p = route.params

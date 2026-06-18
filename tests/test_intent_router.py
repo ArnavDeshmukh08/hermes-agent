@@ -65,6 +65,45 @@ class ClassifyTest(unittest.TestCase):
         # 'find' + 'leads' would match lead, but reminder is checked first.
         self.assertEqual(router.classify("remind me to find 5 clinics in Pune").intent, "reminder")
 
+    def test_reminder_intent_not_triggered_by_why_question(self):
+        # Asking *about* the agenda question is conversation, not a reminder.
+        r = router.classify("why did you ask for the agenda")
+        self.assertEqual(r.intent, "conversational")
+
+    def test_reminder_intent_not_triggered_by_greeting(self):
+        # Greetings/acknowledgements (and "that reminds me ...") are NOT reminders.
+        for s in ("how are you", "thanks for that", "that reminds me of something"):
+            self.assertEqual(router.classify(s).intent, "conversational", s)
+
+    def test_reminder_set_triggered_by_remind_me(self):
+        r = router.classify("remind me to call mom")
+        self.assertEqual(r.intent, "reminder")
+        self.assertEqual(r.params["action"], "set")
+
+    def test_reminder_list_action(self):
+        for s in (
+            "what reminders do I have",
+            "list my reminders",
+            "show my reminders",
+            "any reminders",
+        ):
+            r = router.classify(s)
+            self.assertEqual(r.intent, "reminder", s)
+            self.assertEqual(r.params["action"], "list", s)
+
+    def test_reminder_cancel_action(self):
+        r = router.classify("cancel the call mom reminder")
+        self.assertEqual(r.intent, "reminder")
+        self.assertEqual(r.params["action"], "cancel")
+
+    def test_conversation_resumes_after_reminder(self):
+        # Classification is stateless: a reminder message does not put the router
+        # into a "reminder mode" that traps the next message.
+        first = router.classify("remind me to call mom")
+        self.assertEqual(first.intent, "reminder")
+        second = router.classify("how are you")
+        self.assertEqual(second.intent, "conversational")
+
     def test_empty(self):
         self.assertIsNone(router.classify(""))
         self.assertIsNone(router.classify("   "))

@@ -38,11 +38,46 @@ _ROW_RE = re.compile(r"\brow\s+(\d+)\b", re.IGNORECASE)
 _COUNT_RE = re.compile(r"\b(\d{1,6})\b")
 _FILLER_RE = re.compile(r"\b(me|some|a|an|the|all|please|for|us|of|new|good|top)\b", re.IGNORECASE)
 # Reminder phrasing. Checked BEFORE lead/outreach so "remind me to find leads"
-# is a reminder, not a lead.
-_REMINDER_RE = re.compile(
-    r"\b(remind me|reminder|don'?t let me forget|set an? (alarm|reminder)|alert me)\b",
+# is a reminder, not a lead. Split into three sub-actions so a bare "reminder"
+# (which over-matches ordinary chat) never triggers on its own — every branch
+# requires an explicit verb/phrase.
+#
+# list: queries about existing reminders ("what reminders do I have").
+_REMINDER_LIST_RE = re.compile(
+    r"\b(?:(?:what|which|any)\s+reminders?\b|"
+    r"(?:list|show|see|view)\s+(?:my\s+|all\s+|the\s+)?reminders?\b|"
+    r"my\s+reminders?\b)",
     re.IGNORECASE,
 )
+# cancel: removing an existing reminder ("cancel the call mom reminder").
+_REMINDER_CANCEL_RE = re.compile(
+    r"\b(?:cancel|delete|remove|forget|clear|drop)\b[^.!?]*\breminders?\b",
+    re.IGNORECASE,
+)
+# set: creating a reminder. Requires an explicit "remind/reminder/alert/alarm"
+# trigger with an accompanying verb or preposition — a bare "reminder" won't match.
+_REMINDER_SET_RE = re.compile(
+    r"\b(?:remind\s+me\b|"
+    r"reminder\s+(?:for|to|about)\b|"
+    r"don'?t\s+let\s+me\s+forget\b|"
+    r"set\s+(?:up\s+)?an?\s+(?:alarm|reminder)\b|"
+    r"alert\s+me\s+(?:to|when|about|that|if)\b)",
+    re.IGNORECASE,
+)
+
+
+def _reminder_action(t: str) -> str | None:
+    """Return the reminder sub-action ('set' | 'list' | 'cancel') for `t`, or
+    None if `t` is not a reminder request. Order matters: cancel and list are
+    checked before set so "cancel the X reminder" / "list my reminders" win over
+    a stray set-style match."""
+    if _REMINDER_CANCEL_RE.search(t):
+        return "cancel"
+    if _REMINDER_LIST_RE.search(t):
+        return "list"
+    if _REMINDER_SET_RE.search(t):
+        return "set"
+    return None
 
 
 @dataclass(frozen=True)
@@ -63,8 +98,9 @@ def classify(text: str) -> Route | None:
         return None
     if _STATUS_RE.match(t):
         return Route("status")
-    if _REMINDER_RE.search(t):
-        return Route("reminder", {"text": t})
+    action = _reminder_action(t)
+    if action is not None:
+        return Route("reminder", {"action": action, "text": t})
     if _OUTREACH_RE.search(t):
         params = {}
         mr = _ROW_RE.search(t)

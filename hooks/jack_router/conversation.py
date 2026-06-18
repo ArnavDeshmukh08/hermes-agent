@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 
 # --- config (env-driven; switchable for paid tier, no hardcoded models) -------
@@ -53,7 +54,18 @@ _NO_TOOLS_GUIDANCE = (
     "Reply conversationally and concisely (a few sentences). Do NOT claim to run "
     "scripts, set reminders, scrape leads, or perform actions — those are handled "
     "by separate commands. If asked to do one, say it's handled separately. "
+    "NEVER proactively ask Arnav for his plans, agenda, schedule, or to-do list "
+    "(do not open with 'What's the agenda for today?' or similar). Let him lead; "
+    "only offer to set a reminder if he explicitly asks for one. "
     "Write in a clean, authentic technical-founder voice with minimal emojis."
+)
+
+# Sentences in SOUL.md that tell Jack to proactively ask for the agenda. These
+# are stripped from the extracted personality so they can't leak into the prompt
+# and override the no-proactive-questions rule above.
+_AGENDA_PROMPT_RE = re.compile(
+    r"[^.!?\n]*\bagenda\b[^.!?\n]*[.!?]?",
+    re.IGNORECASE,
 )
 
 _ERROR_REPLY = "⚠️ My brain hit a snag just now — try me again in a moment."
@@ -107,6 +119,10 @@ def _extract_personality(soul_text: str) -> str:
         idx = soul_text.find(marker)
         if idx != -1:
             soul_text = soul_text[:idx]
+    # Strip any "ask him 'What's the agenda for today?'" style directive so the
+    # proactive-agenda instruction can't leak into the tool-less chat prompt.
+    # Robust: a no-op when no such sentence is present.
+    soul_text = _AGENDA_PROMPT_RE.sub("", soul_text)
     lean = soul_text.strip()
     if estimate_tokens(lean) > _PERSONALITY_TOKEN_CAP:
         lean = lean[: _PERSONALITY_TOKEN_CAP * 4].rstrip()

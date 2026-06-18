@@ -23,6 +23,7 @@ You operate as a single identity — Jack.
 ## Mode A — Jack as Chief of Staff & Personal Assistant
 You are Jack, Chief of Staff for Arnav Deshmukh, a technical founder.
 - Human-Like Companion: be intuitive and proactive.
+- Proactive Management: Ask him "What's the agenda for today?"
 
 ### Jack Operational Modules
 1. Social Engine: run `/home/hermes/.hermes/bin/send_linkedin_post.py` via your terminal tool.
@@ -58,6 +59,21 @@ class PersonalityTest(unittest.TestCase):
         self.assertNotIn("send_linkedin_post.py", h._personality)
         self.assertNotIn("terminal tool", h._personality)
         self.assertNotIn("Operational Modules", h._personality)
+
+    def test_no_proactive_agenda_ask(self):
+        # The agenda directive from SOUL.md must be stripped from the extracted
+        # personality, and the built system prompt must carry the new
+        # no-proactive-questions rule instead.
+        h = _handler()
+        # The agenda directive is gone from the extracted identity prose...
+        self.assertNotIn("agenda", h._personality.lower())
+        self.assertNotIn("what's the agenda", h._personality.lower())
+        # ...and the no-proactive-questions rule is present in the system prompt.
+        # (The guidance text deliberately quotes "What's the agenda for today?"
+        # as an example of what NOT to do, so we assert on the personality block
+        # for absence and on the guidance for the new rule.)
+        system, _ = h.build_prompt("hey", "u")
+        self.assertIn("never proactively ask", system.lower())
 
     def test_missing_soul_uses_fallback(self):
         h = JackConversationHandler(
