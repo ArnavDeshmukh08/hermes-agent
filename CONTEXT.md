@@ -10,15 +10,20 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-18. (**Hamza → Jack unification (in progress).** The two-persona
-> model (Jack in DMs / Hamza in the Vytal group) is retired in favour of **one unified `Jack`
-> persona on both surfaces**. Lead-router code renamed `hooks/hamza_router/` → `hooks/jack_router/`
-> (module `jack_intent_router.py`, env `JACK_WORKER_ROOT`/`JACK_ROUTER_MAX_CONCURRENT`, worker-path
-> target `~/.hermes/jack_worker`, sheet tab `Jack_Leads`, log `[jack_router]`, Discord trigger
-> `@Jack`); 13 intent tests pass. **Local repo + git baseline done; live-VPS cutover NOT executed** —
-> still pending: rename `~/.hermes/{hamza_worker,hooks/hamza_router}`, edit `config.yaml`+`SOUL.md`
-> to the single Jack persona, switch the live `@Hamza` trigger, rename the `Hamza_Leads` sheet tab
-> (see the cutover checklist). Historical reports/logs keep the "Hamza" name as a factual record.
+> Last meaningful update: 2026-06-18. (**Hamza → Jack unification — DONE, incl. live VPS.** The
+> two-persona model (Jack in DMs / Hamza in the Vytal group) is retired → **one unified `Jack`
+> persona on both surfaces**. Local repo + git baseline done (13 intent tests pass). **Live-VPS
+> cutover EXECUTED** on `personal-os`: renamed `~/.hermes/{hamza_worker→jack_worker,
+> hooks/hamza_router→jack_router}`, `config.yaml`+`SOUL.md` now one Jack persona (Mode A DMs / Mode B
+> Vytal group), Google Sheet tab `hamza_leads`→`Jack_Leads`, gateway restarted clean. Backups in
+> `~/.hermes/jack_cutover_bak_20260618_090941/`. ⚠️ One manual step left: rename the Discord **bot
+> display name** `@Hamza`→`@Jack` in the Discord portal (not SSH-able). Legacy `hamza_orchestrator.py`
+> + historical reports keep the "Hamza" name on purpose.
+> **413 chat MITIGATED (lite chat):** conversational turns 413'd (Groq free 12k TPM < ~29.6k per
+> turn). Fix: `max_tokens` 8192→1024 + gated telegram/discord chat to **memory-only** (dropped a real
+> turn 29,625→fits). Fresh chat now replies; long sessions still auto-reset. Routing a model to the
+> local 8B was tried + reverted (too slow on a 30k prompt). Terminal-based chat caps (reminders,
+> image-gen, social) now OFF in chat → planned as deterministic Discord **router intents** next.
 > Prior entries below.)
 >
 > Earlier 2026-06-18: (**Intent Router** live: a user-space hook
