@@ -7,7 +7,7 @@ agent loop and dispatch straight to the worker. Everything lives in user space
 can't silently wipe it (the hook reinstalls on next startup).
 
 Flow for an operational message:
-  @Hamza find 100 physiotherapy clinics in India
+  @Hamza find 100 psychiatry clinics in India
     → classify() → Route("lead", {...})
     → reply "on it · task <id>" via the LIVE bot (same channel)
     → background task runs the worker (bounded by a semaphore; blocking I/O via

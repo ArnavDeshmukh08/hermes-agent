@@ -4,7 +4,7 @@ A spec is plain JSON the user supplies. New lead-finding tasks require *no code
 change*: just different `target`/`location`/`columns`. We accept both the
 mission's `columns` key and LEAD-ENGINE's `fields` alias.
 
-    {"target": "physiotherapy clinics", "location": "India",
+    {"target": "psychiatry clinics", "location": "India",
      "columns": ["name", "clinic", "phone", "email", "website"]}
 """
 

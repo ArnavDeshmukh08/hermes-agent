@@ -8,7 +8,7 @@
 
 The spec is dynamic — new lead tasks need only a different target/location/columns:
 
-    {"target": "physiotherapy clinics", "location": "India",
+    {"target": "psychiatry clinics", "location": "India",
      "columns": ["name", "clinic", "phone", "email", "website"], "outreach": true}
 """
 
