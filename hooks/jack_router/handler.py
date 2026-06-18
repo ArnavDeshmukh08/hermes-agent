@@ -122,10 +122,49 @@ def _task_id(message) -> str:
     return hashlib.sha1(str(getattr(message, "id", "")).encode()).hexdigest()[:10]
 
 
+_CONVO = None
+
+
+def _convo():
+    """Lazily build the singleton conversation brain (reads SOUL.md/USER.md once)."""
+    global _CONVO
+    if _CONVO is None:
+        _prepare_worker_env()
+        from conversation import JackConversationHandler
+
+        _CONVO = JackConversationHandler()
+    return _CONVO
+
+
+async def _run_conversation(message, route) -> None:
+    """Answer a conversational turn with Jack's lean brain — bypasses the agent
+    loop entirely (no 413). Blocking LLM call runs off-thread inside respond()."""
+    channel = message.channel
+    try:
+        author = getattr(message, "author", None)
+        user_id = str(getattr(author, "id", "") or "anon")
+        text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+        async with _sem():
+            reply = await _convo().respond(text, user_id)
+        await channel.send(reply)
+    except Exception as e:  # noqa: BLE001 - never crash the gateway on a chat turn
+        await channel.send("⚠️ I glitched on that one — say it again?")
+        _log(f"conversation failed: {e!r}")
+
+
 async def _dispatch(adapter, message, route) -> None:
     channel = message.channel
     if route.intent == "status":
         await channel.send(_status_text())
+        return
+    if route.intent == "conversational":
+        _fire(_run_conversation(message, route))
+        return
+    if route.intent == "reminder":
+        await channel.send(
+            "⏰ Got it — but full reminder scheduling isn't wired up yet (coming soon). "
+            "I can't set it automatically right now."
+        )
         return
     if route.intent == "lead":
         p = route.params

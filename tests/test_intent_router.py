@@ -37,7 +37,9 @@ class ClassifyTest(unittest.TestCase):
         for s in ("status", "queue", "running tasks", "what's running", "jobs"):
             self.assertEqual(router.classify(s).intent, "status", s)
 
-    def test_conversational_falls_through(self):
+    def test_conversational_default(self):
+        # These used to fall through to the agent (None → 413). Now they are
+        # classified 'conversational' so the lean brain handles them.
         for s in (
             "what do you think about AI agents?",
             "hello",
@@ -45,7 +47,23 @@ class ClassifyTest(unittest.TestCase):
             "find a good restaurant near me",  # 'restaurant' is not a lead noun
             "can you research that topic for me",  # 'research' verb but no target noun
         ):
-            self.assertIsNone(router.classify(s), s)
+            r = router.classify(s)
+            self.assertIsNotNone(r, s)
+            self.assertEqual(r.intent, "conversational", s)
+
+    def test_no_real_message_reaches_agent(self):
+        # Critical: every non-empty message must get a Route (never None), so
+        # nothing falls through to the framework agent loop that 413s.
+        for s in ("hey", "lol ok", "tell me a joke", "🙂", "status report pls"):
+            self.assertIsNotNone(router.classify(s), s)
+
+    def test_reminder_intent(self):
+        for s in ("remind me to call mom", "set a reminder for the gym", "don't let me forget the demo"):
+            self.assertEqual(router.classify(s).intent, "reminder", s)
+
+    def test_reminder_beats_lead(self):
+        # 'find' + 'leads' would match lead, but reminder is checked first.
+        self.assertEqual(router.classify("remind me to find 5 clinics in Pune").intent, "reminder")
 
     def test_empty(self):
         self.assertIsNone(router.classify(""))
@@ -73,8 +91,9 @@ class ClassifyTest(unittest.TestCase):
 
     def test_outreach_no_false_positive_on_plain_message(self):
         # ordinary conversational requests must NOT be stolen by the outreach intent
+        # (they now land as 'conversational' rather than None)
         for s in ("draft a message to my team", "write a message", "can you make an email signature"):
-            self.assertIsNone(router.classify(s), s)
+            self.assertEqual(router.classify(s).intent, "conversational", s)
 
     def test_outreach_does_not_eat_lead(self):
         # "find" lead requests must not be misread as outreach

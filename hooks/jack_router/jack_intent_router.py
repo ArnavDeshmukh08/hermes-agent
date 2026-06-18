@@ -37,21 +37,34 @@ _OUTREACH_RE = re.compile(
 _ROW_RE = re.compile(r"\brow\s+(\d+)\b", re.IGNORECASE)
 _COUNT_RE = re.compile(r"\b(\d{1,6})\b")
 _FILLER_RE = re.compile(r"\b(me|some|a|an|the|all|please|for|us|of|new|good|top)\b", re.IGNORECASE)
+# Reminder phrasing. Checked BEFORE lead/outreach so "remind me to find leads"
+# is a reminder, not a lead.
+_REMINDER_RE = re.compile(
+    r"\b(remind me|reminder|don'?t let me forget|set an? (alarm|reminder)|alert me)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "conversational"
     params: dict = field(default_factory=dict)
 
 
 def classify(text: str) -> Route | None:
-    """Return a Route for operational messages, else None (→ agent)."""
+    """Classify a message into a Route.
+
+    Operational intents (status / reminder / outreach / lead) match specific
+    patterns; everything else non-empty becomes **conversational** so NOTHING
+    falls through to the framework agent loop (which 413s on Groq's 12k TPM).
+    Only truly empty input returns None."""
     t = (text or "").strip()
     if not t:
         return None
     if _STATUS_RE.match(t):
         return Route("status")
+    if _REMINDER_RE.search(t):
+        return Route("reminder", {"text": t})
     if _OUTREACH_RE.search(t):
         params = {}
         mr = _ROW_RE.search(t)
@@ -60,7 +73,7 @@ def classify(text: str) -> Route | None:
         return Route("outreach", params)
     if re.search(_LEAD_VERBS, t, re.IGNORECASE) and re.search(_LEAD_NOUNS, t, re.IGNORECASE):
         return Route("lead", _parse_lead(t))
-    return None
+    return Route("conversational", {"text": t})
 
 
 def _parse_lead(t: str) -> dict:
