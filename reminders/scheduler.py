@@ -15,10 +15,17 @@ import os
 import signal
 import time
 from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from reminders.notifier import send_reminder
+# Bootstrap: when launched as a plain script (systemd ExecStart runs the file by
+# path), the script's own dir — not the package parent — is on sys.path, so
+# `import reminders` fails. Add the parent (~/.hermes) so it resolves whether run
+# as a script or as `python -m reminders.scheduler`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from reminders.notifier import send_reminder  # noqa: E402 - after sys.path bootstrap
 
 _DEFAULT_POLL_SECONDS = 60
 _LOG_PATH = Path.home() / ".hermes" / "logs" / "reminders.log"
