@@ -430,3 +430,23 @@ Operator gave the go. Cutover run on the live box (`personal-os` 167.233.108.213
 - **Tried & REJECTED — route agent to local model:** repointed `model:` block → local `llama3.1:8b` (pinned 12 `auxiliary.*` blocks to Groq so empty `model: ''` wouldn't 404). One-shot **timed out (180s)** — local prompt-eval of a 30k prompt is too slow. **Reverted to known-good Groq.** (qwen2.5:14b not viable either: 30k > its 32k ctx, and prompt-eval still slow.)
 - **FIX SHIPPED — "lite chat" (operator chose hybrid → lite chat + router reminders):** `max_tokens` 8192→**1024**; gated telegram+discord chat toolsets to **memory-only** (disabled `web`,`cronjob`,`terminal` via `hermes tools disable --platform`). Per-platform gating works at runtime even though static `prompt-size` doesn't reflect it (proved: real turn dropped 29,625→**21,327**, then a fresh memory-only one-shot fit Groq with **no 413**, clean reply "Hi Arnav", ~19s). cli left at full capability. **Honest limit:** Groq free 12k can't robustly hold tool-rich chat + history → fresh msgs work, long sessions still auto-reset. Terminal-based chat caps (reminders, image-gen, LinkedIn/X) now OFF in chat by design.
 - **NEXT (planned, not built):** operator wants reminders + image-gen + social as **deterministic Discord router intents** (chat platform = Discord) so they work without the heavy agent. Reminders need a **durable Discord-native scheduler** (remind.py is Telegram-only); social sends stay **approval-gated**. TDD + deploy as a focused next session.
+
+## Session 2026-06-20 — Garmin + Calendar + Claude-bridge integrations (built local, deploy gated)
+Orchestrated build (Opus plan → 3 Sonnet implementers in parallel → Sonnet wiring; tests/lint/verify run directly). **Verified the brief's premises first** and corrected three before spawning anything:
+- **Path:** brief said `memory/updater.py`; real module is `jack_memory/updater.py` (`memory/` is a data dir).
+- **Config:** brief said new keys go in `config.yaml`; reality = Jack flags are **env vars in `~/.hermes/.env`** (`config.yaml` is the framework config, 0 `JACK_*` keys). New flags → `.env`.
+- **Calendar auth (the big one):** `credentials.json` is a **service account** (`vytal-732@vytal-499305`). It **cannot** impersonate a personal `@gmail.com` calendar (no Workspace domain → no domain-wide delegation). Operator chose **SA + manual calendar-share** model.
+- **Operator decisions:** Garmin = build (accepts fragility, adds creds at deploy); Claude bridge = manual-paste now (claude.ai), auto Claude Code capture deferred.
+
+**Built (all lazy-import + graceful-degradation, mock-only tests, zero network):**
+- `integrations/garmin.py` — `GarminClient` (sleep). 6 tests.
+- `integrations/calendar.py` — `CalendarClient` (service-account, add/list events, IST/RFC3339). New Discord `calendar` intent wired into `jack_intent_router.py` (ordered before reminder so "schedule on my calendar" ≠ reminder) + `_run_calendar` in `handler.py` (reuses `reminders.parser.parse_time`). 7 tests.
+- `integrations/claude_bridge.py` — `ClaudeBridge` (summarize→`MemoryUpdater.update_user_md`→Discord notify), runnable `python -m integrations.claude_bridge`. 8 tests.
+- `briefing/morning.py` — `_garmin_block`/`_calendar_block` pulled into `compile_briefing`, gated on `JACK_GARMIN_ENABLED`/`JACK_CALENDAR_ENABLED`, default-off keeps the existing briefing tests unchanged. 8 wiring tests.
+- `integrations/requirements.txt` — garminconnect, google-api-python-client, google-auth.
+
+**Plan tightening adopted:** `jack_memory/updater.py` unchanged (bridge reuses its writer); bin/sync_claude.py folded into the module; standalone Garmin daily-sync service + USER.md `[HEALTH & FITNESS]` persistence **dropped by design** (briefing-pull instead — avoids an extra service + daily append-only pollution).
+
+**Result:** **191 tests pass** (162 → +21 features +8 wiring), ruff clean, all new files compile. Zero `hamza`; the 10 `physio` hits are **pre-existing lead-gen content** (`worker/leadgen.py` + tests + lead-intent regex), untouched by this work — flagged: contradicts the earlier physiotherapy→psychiatry intent, separate cleanup.
+
+**NOT deployed.** Deploy blockers (operator's manual steps): enable Calendar API on `vytal-499305`; share `arnavdeshmukh008@gmail.com` calendar with the SA email ("Make changes to events"); add `GARMIN_EMAIL`/`GARMIN_PASSWORD` + `JACK_*` flags to `.env`; `pip install -r integrations/requirements.txt` on VPS; `chmod 600 ~/.hermes/credentials.json` (currently 644). Deploy itself restarts the live gateway → awaiting explicit go.

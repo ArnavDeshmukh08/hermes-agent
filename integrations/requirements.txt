@@ -1,0 +1,9 @@
+# Extra dependencies for the integrations/ package.
+# Install on the VPS before enabling the Garmin / Calendar features:
+#   pip install -r integrations/requirements.txt
+# All three are imported LAZILY inside methods, so the test suite and the rest
+# of Jack run fine without them installed (features just no-op when absent).
+
+garminconnect            # Garmin Connect sleep/activity (GARMIN_EMAIL/GARMIN_PASSWORD)
+google-api-python-client # Google Calendar v3 (service-account auth)
+google-auth              # service-account credentials loader

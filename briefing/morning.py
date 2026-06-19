@@ -16,9 +16,10 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import time as dtime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 # Bootstrap: when launched as a plain script (systemd ExecStart runs the file by
 # path), the script's own dir — not the package parent — is on sys.path. Add the
@@ -46,7 +47,9 @@ _SYSTEM_PROMPT = (
     "check-in. Be casual and warm, like a friend texting — not a corporate "
     "briefing. Weave in today's reminders, his current priorities, and one "
     "relevant touch about his life. Keep it SHORT: at most 5 lines. Do NOT use "
-    "bullet points or lists — talk like a real person, in plain sentences."
+    "bullet points or lists — talk like a real person, in plain sentences. "
+    "If sleep or calendar info is given, weave it in naturally — a nudge if he "
+    "slept poorly, a heads-up on his first event."
 )
 
 
@@ -62,8 +65,8 @@ class MorningBriefing:
         self,
         user_path: str | Path | None = None,
         store: Any = None,
-        complete_fn: Optional[Callable[..., str]] = None,
-        send_fn: Optional[Callable[..., bool]] = None,
+        complete_fn: Callable[..., str] | None = None,
+        send_fn: Callable[..., bool] | None = None,
         log_path: str | Path | None = None,
     ) -> None:
         env_user = os.environ.get("JACK_USER_PATH")
@@ -102,6 +105,29 @@ class MorningBriefing:
             from reminders.notifier import send_message as fn  # type: ignore[no-redef]
         return fn(content, user_id=user_id)
 
+    def _garmin_block(self) -> str:
+        """Return a one-line Garmin sleep summary, or '' when disabled/unavailable."""
+        if not _truthy(os.environ.get("JACK_GARMIN_ENABLED")):
+            return ""
+        try:
+            from integrations.garmin import GarminClient  # lazy import
+
+            return GarminClient().sleep_summary_text() or ""
+        except Exception:  # noqa: BLE001 — outage must never block the briefing
+            return ""
+
+    def _calendar_block(self, user_id: str, now: datetime | None) -> str:
+        """Return today's calendar events as text, or '' when disabled/unavailable."""
+        if not _truthy(os.environ.get("JACK_CALENDAR_ENABLED")):
+            return ""
+        try:
+            from integrations.calendar import CalendarClient  # lazy import
+
+            day = now.astimezone(_IST) if now is not None else None
+            return CalendarClient().events_summary_text(day=day) or ""
+        except Exception:  # noqa: BLE001 — outage must never block the briefing
+            return ""
+
     # -- data gathering --------------------------------------------------
     def _read_user_md(self) -> str:
         """Read USER.md fresh each call; empty string if missing/unreadable."""
@@ -110,7 +136,7 @@ class MorningBriefing:
         except OSError:
             return ""
 
-    def todays_reminders(self, user_id: str, now: Optional[datetime] = None) -> list[dict]:
+    def todays_reminders(self, user_id: str, now: datetime | None = None) -> list[dict]:
         """Pending reminders whose fire_at falls on TODAY in IST.
 
         fire_at is stored UTC ('Z'); we compare calendar dates in IST so a
@@ -136,7 +162,7 @@ class MorningBriefing:
         return out
 
     # -- briefing text ---------------------------------------------------
-    def compile_briefing(self, user_id: str, now: Optional[datetime] = None) -> str:
+    def compile_briefing(self, user_id: str, now: datetime | None = None) -> str:
         """Build the briefing string from USER.md + today's reminders via the LLM."""
         user_md = self._read_user_md()
         reminders = self.todays_reminders(user_id, now=now)
@@ -146,12 +172,17 @@ class MorningBriefing:
         else:
             reminder_block = "(none today)"
 
+        sleep_block = self._garmin_block()
+        events_block = self._calendar_block(user_id, now)
+
         user_prompt = (
             "Here is what you know about Arnav (USER.md):\n"
             f"{user_md}\n\n"
             "Today's reminders:\n"
             f"{reminder_block}\n\n"
-            "Write his morning check-in now."
+            + (f"Today's calendar:\n{events_block}\n\n" if events_block else "")
+            + (f"Last night's sleep (Garmin):\n{sleep_block}\n\n" if sleep_block else "")
+            + "Write his morning check-in now."
         )
 
         text = self._complete(_SYSTEM_PROMPT, user_prompt)
@@ -176,7 +207,7 @@ class MorningBriefing:
         return "\n".join(cleaned)
 
     # -- delivery --------------------------------------------------------
-    def send_briefing(self, user_id: str, now: Optional[datetime] = None) -> bool:
+    def send_briefing(self, user_id: str, now: datetime | None = None) -> bool:
         """Compile, send, and log the briefing. Swallows errors; never raises."""
         try:
             text = self.compile_briefing(user_id, now=now)
@@ -200,7 +231,7 @@ class MorningBriefing:
             print(f"[briefing.morning] log write failed: {type(exc).__name__}")
 
     # -- scheduling ------------------------------------------------------
-    def next_fire(self, now: Optional[datetime] = None) -> datetime:
+    def next_fire(self, now: datetime | None = None) -> datetime:
         """Next occurrence of JACK_BRIEFING_TIME_IST in IST, returned as UTC.
 
         If today's time has already passed (or equals now), rolls to tomorrow.

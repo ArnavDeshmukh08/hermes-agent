@@ -272,6 +272,102 @@ async def _run_reminder(message, route) -> None:
         _log(f"reminder failed: {e!r}")
 
 
+async def _run_calendar(message, route) -> None:
+    """Add or list calendar events — no agent loop.
+
+    CalendarClient is imported lazily so google-api-python-client is optional.
+    Blocking calendar calls run in a thread via asyncio.to_thread.
+    """
+    channel = message.channel
+    action = route.params.get("action", "add")
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+    try:
+        async with _sem():
+            from integrations.calendar import CalendarClient  # lazy import
+
+            client = CalendarClient()
+
+            if action == "list":
+                events = await asyncio.to_thread(client.list_events)
+                if events is None:
+                    await channel.send(
+                        "📅 Calendar isn't connected yet — share the calendar with "
+                        "the service account and set JACK_CALENDAR_ID to get started."
+                    )
+                    return
+                if not events:
+                    await channel.send("📅 Nothing on the calendar today.")
+                    return
+                summary = await asyncio.to_thread(client.events_summary_text)
+                await channel.send(f"📅 Today's calendar:\n{summary}")
+                return
+
+            # action == "add"
+            # Extract the start time from the free-text using reminders.parser.parse_time
+            # (it returns fire_at in UTC; we convert to IST for the event datetime).
+            from datetime import timedelta, timezone
+
+            from reminders import parser as rparser  # lazy import
+
+            try:
+                parsed = await asyncio.to_thread(rparser.parse_time, text)
+            except ValueError:
+                parsed = None
+
+            _IST = timezone(timedelta(hours=5, minutes=30))
+
+            if parsed is not None:
+                start_ist = parsed.fire_at.astimezone(_IST)
+            else:
+                # No recognisable time — default to top of the next hour in IST.
+                import datetime as _dt
+
+                now_ist = _dt.datetime.now(_IST)
+                start_ist = now_ist.replace(minute=0, second=0, microsecond=0) + _dt.timedelta(hours=1)
+
+            # Derive a short event summary by stripping time/calendar phrases.
+            summary_text = _extract_event_title(text)
+
+            result = await asyncio.to_thread(
+                client.add_event,
+                summary_text,
+                start_ist,
+            )
+            if result is None:
+                await channel.send(
+                    "📅 Calendar isn't connected yet — share the calendar with "
+                    "the service account and set JACK_CALENDAR_ID to get started."
+                )
+                return
+
+            when_str = start_ist.strftime("%-I:%M %p IST, %a %b %-d")
+            await channel.send(f"Added ✅ {result['summary']} — {when_str}")
+    except Exception as e:  # noqa: BLE001 — never crash the gateway on a calendar error
+        await channel.send("📅 Calendar glitch — try that again?")
+        _log(f"calendar failed: {e!r}")
+
+
+# Phrases to strip when extracting a clean event title from the raw text.
+_CAL_STRIP_RE = re.compile(
+    r"\b(?:add|put|create|book|insert|log|schedule|to\s+(?:my\s+)?calendar|"
+    r"on\s+(?:my\s+)?calendar|in\s+(?:my\s+)?calendar|"
+    r"appointment|event|meeting)\b",
+    re.IGNORECASE,
+)
+_TIME_STRIP_RE = re.compile(
+    r"\b(?:at|on|by|this|tonight|tomorrow|today|next)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_event_title(text: str) -> str:
+    """Best-effort extraction of a clean event summary from the raw message."""
+    t = _CAL_STRIP_RE.sub(" ", text)
+    t = _TIME_STRIP_RE.sub("", t)
+    t = re.sub(r"\s+", " ", t).strip(" .,!?")
+    return t or text.strip()
+
+
 async def _dispatch(adapter, message, route) -> None:
     channel = message.channel
     if route.intent == "status":
@@ -290,6 +386,9 @@ async def _dispatch(adapter, message, route) -> None:
         return
     if route.intent == "reminder":
         _fire(_run_reminder(message, route))
+        return
+    if route.intent == "calendar":
+        _fire(_run_calendar(message, route))
         return
     if route.intent == "lead":
         p = route.params

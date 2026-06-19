@@ -77,6 +77,29 @@ _COMPLAINT_RE = re.compile(
     r"you\s+were\s+supposed\s+to\b)",
     re.IGNORECASE,
 )
+# Calendar intents. The noun (calendar/schedule/agenda/appointment/meeting/event)
+# is REQUIRED to avoid stealing ordinary chat ("what's happening today?").
+# _CALENDAR_RE matches any calendar-management request (add OR list).
+# _CALENDAR_LIST_RE matches list/query requests specifically so the handler can
+# choose between "add" and "list" actions.
+_CALENDAR_RE = re.compile(
+    r"\b(?:"
+    r"(?:add|put|create|book|insert|log|schedule)\b[^.!?]*"
+    r"\b(?:calendar|appointment|meeting|event)\b"
+    r"|"
+    r"(?:what'?s?\s+on|show|list|view|check|see)\b[^.!?]*"
+    r"\b(?:calendar|schedule|agenda)\b"
+    r"|"
+    r"\b(?:my\s+)?(?:calendar|agenda|schedule)\b[^.!?]*"
+    r"\b(?:today|tomorrow|this\s+week|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    r")",
+    re.IGNORECASE,
+)
+_CALENDAR_LIST_RE = re.compile(
+    r"\b(?:what'?s?\s+on|show|list|view|check|see)\b[^.!?]*"
+    r"\b(?:calendar|schedule|agenda)\b",
+    re.IGNORECASE,
+)
 
 
 def _reminder_action(t: str) -> str | None:
@@ -95,17 +118,17 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "conversational"
     params: dict = field(default_factory=dict)
 
 
 def classify(text: str) -> Route | None:
     """Classify a message into a Route.
 
-    Operational intents (status / reminder / outreach / lead) match specific
-    patterns; everything else non-empty becomes **conversational** so NOTHING
-    falls through to the framework agent loop (which 413s on Groq's 12k TPM).
-    Only truly empty input returns None."""
+    Operational intents (status / reminder / outreach / lead / calendar) match
+    specific patterns; everything else non-empty becomes **conversational** so
+    NOTHING falls through to the framework agent loop (which 413s on Groq's
+    12k TPM). Only truly empty input returns None."""
     t = (text or "").strip()
     if not t:
         return None
@@ -115,6 +138,12 @@ def classify(text: str) -> Route | None:
         return Route("complaint", {"text": t})
     if _STATUS_RE.match(t):
         return Route("status")
+    # Calendar branch — checked BEFORE reminder so "add dentist appointment to
+    # my calendar" wins over any incidental reminder-style phrasing. The noun
+    # guard (calendar/appointment/meeting/event) keeps ordinary chat out.
+    if _CALENDAR_RE.search(t):
+        action = "list" if _CALENDAR_LIST_RE.search(t) else "add"
+        return Route("calendar", {"action": action, "text": t})
     action = _reminder_action(t)
     if action is not None:
         return Route("reminder", {"action": action, "text": t})

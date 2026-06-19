@@ -10,7 +10,12 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-18. (**Hamza → Jack unification — DONE, incl. live VPS.** The
+> Last meaningful update: 2026-06-20. (**New integrations built locally: Garmin sleep + Google
+> Calendar + Claude session-bridge — 21 new tests, 191 total green, lint-clean. Garmin/Calendar
+> pull into the morning briefing; Calendar adds a Discord `calendar` intent (add/list); the bridge
+> summarizes a pasted Claude session into USER.md + Discord. NOT yet deployed — gated on: enable
+> Calendar API on `vytal-499305`, share Arnav's calendar with `vytal-732@vytal-499305.iam.gserviceaccount.com`,
+> add `GARMIN_EMAIL`/`GARMIN_PASSWORD` to `.env`. See §10.**) Prior 2026-06-18: (**Hamza → Jack unification — DONE, incl. live VPS.** The
 > two-persona model (Jack in DMs / Hamza in the Vytal group) is retired → **one unified `Jack`
 > persona on both surfaces**. Local repo + git baseline done (13 intent tests pass). **Live-VPS
 > cutover EXECUTED** on `personal-os`: renamed `~/.hermes/{hamza_worker→jack_worker,
@@ -198,6 +203,20 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 **Working:**
 - ✅ Zero-token reminders that always deliver (no LLM at fire time).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
+
+**Built 2026-06-20 (local only — not yet deployed):** three new `integrations/` modules, all with
+lazy imports + graceful degradation (they no-op when creds/libs absent), 21 new tests, 191 total green:
+- **Garmin** (`integrations/garmin.py`) — `GarminClient.sleep_summary_text()`; pulled into the morning
+  briefing when `JACK_GARMIN_ENABLED=1` + `GARMIN_EMAIL`/`GARMIN_PASSWORD` set. (Login is fragile by nature.)
+- **Google Calendar** (`integrations/calendar.py`) — service-account auth against `~/.hermes/credentials.json`;
+  `add_event`/`list_events`; new Discord `calendar` intent (add/list) wired in `jack_intent_router.py`+`handler.py`;
+  pulled into the briefing. **Gated** until: Calendar API enabled on `vytal-499305` + Arnav shares his calendar
+  with `vytal-732@vytal-499305.iam.gserviceaccount.com` (else every call 403s → "calendar not connected yet").
+- **Claude bridge** (`integrations/claude_bridge.py`) — `python -m integrations.claude_bridge` summarizes a pasted
+  claude.ai session → appends to USER.md (reuses `MemoryUpdater.update_user_md`) + Discord notify. Manual-paste
+  only this round; automatic Claude Code capture deferred.
+- Deps in `integrations/requirements.txt` (garminconnect, google-api-python-client, google-auth). Deferred by
+  design: the standalone Garmin daily-sync service + USER.md `[HEALTH & FITNESS]` persistence (briefing-pull instead).
 - ✅ SSH hardened (key-only). Gateway service active.
 
 **Paused / deferred:**
