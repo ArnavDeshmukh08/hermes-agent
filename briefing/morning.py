@@ -21,9 +21,15 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 # Bootstrap: when launched as a plain script (systemd ExecStart runs the file by
-# path), the script's own dir — not the package parent — is on sys.path, so
-# `import reminders` / `import briefing` fails. Add the parent (~/.hermes) first.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# path), the script's own dir — not the package parent — is on sys.path. Add the
+# package parent (~/.hermes, for `reminders`/`briefing`) AND the worker bundle
+# (~/.hermes/jack_worker, where `lib`/`lib.llm` lives on the VPS — without it,
+# compile_briefing's `from lib import llm` ModuleNotFErrors at fire time).
+# Locally `lib` is at the repo root, which parents[1] already covers.
+_BOOT_ROOT = Path(__file__).resolve().parents[1]
+for _bp in (str(_BOOT_ROOT), str(_BOOT_ROOT / "jack_worker")):
+    if _bp not in sys.path:
+        sys.path.insert(0, _bp)
 
 # IST is UTC+5:30, fixed offset (no DST) — safe as a static timezone.
 _IST = timezone(timedelta(hours=5, minutes=30))
