@@ -260,6 +260,14 @@ async def _dispatch(adapter, message, route) -> None:
     if route.intent == "status":
         await channel.send(_status_text())
         return
+    if route.intent == "complaint":
+        # A complaint about a missed/forgotten reminder ("you didn't remind me ...").
+        # Apologize + offer to reschedule. Set NO reminder, run NO agent loop.
+        await channel.send(
+            "You're right — sorry about that. Want me to set it again? "
+            "Just tell me the task and time."
+        )
+        return
     if route.intent == "conversational":
         _fire(_run_conversation(message, route))
         return

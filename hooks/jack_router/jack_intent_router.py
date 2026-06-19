@@ -64,6 +64,19 @@ _REMINDER_SET_RE = re.compile(
     r"alert\s+me\s+(?:to|when|about|that|if)\b)",
     re.IGNORECASE,
 )
+# Complaint / feedback markers. Checked FIRST in classify() — a complaint about a
+# missed reminder ("you didn't remind me ...") contains "remind me" and would
+# otherwise be misread as a NEW reminder command and set a bogus reminder.
+_COMPLAINT_RE = re.compile(
+    r"\b(?:you\s+didn'?t\b|"
+    r"you\s+forgot\b|"
+    r"why\s+didn'?t\s+you\b|"
+    r"you\s+never\s+(?:reminded|told|said|asked|sent|warned|mentioned)\b|"
+    r"you\s+said\s+you\s+would\b|"
+    r"i\s+can'?t\s+believe\s+you\b|"
+    r"you\s+were\s+supposed\s+to\b)",
+    re.IGNORECASE,
+)
 
 
 def _reminder_action(t: str) -> str | None:
@@ -82,7 +95,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -96,6 +109,10 @@ def classify(text: str) -> Route | None:
     t = (text or "").strip()
     if not t:
         return None
+    # Complaint guard FIRST: a feedback message like "you didn't remind me ..."
+    # contains a reminder trigger but must never become a reminder/lead/status.
+    if _COMPLAINT_RE.search(t):
+        return Route("complaint", {"text": t})
     if _STATUS_RE.match(t):
         return Route("status")
     action = _reminder_action(t)
