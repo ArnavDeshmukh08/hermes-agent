@@ -46,7 +46,7 @@ class WorkerSystemTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def _spec(self, **over):
-        base = {"target": "physiotherapy clinics", "location": "India",
+        base = {"target": "psychiatry clinics", "location": "India",
                 "columns": ["name", "clinic", "phone", "email", "website"], "count": 6}
         base.update(over)
         return load_spec(base)
@@ -133,7 +133,7 @@ class WorkerSystemTest(unittest.TestCase):
             self.assertTrue(row["source_url"])   # provenance present on every row
             self.assertTrue(row["fetched_at"])
             # social worker filled it; the @ is formula-guarded ('@...) but the handle is intact
-            self.assertIn("physiotherapy", row["instagram"])
+            self.assertIn("psychiatry", row["instagram"])
 
     def test_outreach_drafts_pitch_and_never_sends(self):
         spec = self._spec(outreach=True, count=4)
@@ -185,7 +185,7 @@ class WorkerSystemTest(unittest.TestCase):
         self.assertFalse(leadgen.is_safe_url("http://localhost:11434/api"))
         self.assertFalse(leadgen.is_safe_url("file:///etc/passwd"))
         self.assertFalse(leadgen.is_safe_url("https://www.facebook.com/x"))
-        self.assertTrue(leadgen.is_safe_url("https://sunrisephysio.in/contact"))
+        self.assertTrue(leadgen.is_safe_url("https://sunrisepsych.in/contact"))
 
     # -- parallel beats sequential ------------------------------------------
     def test_parallel_faster_than_sequential(self):

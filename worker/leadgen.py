@@ -178,11 +178,11 @@ def _mock_page(url: str, limit: int) -> str:
     lines = [f"Directory results for {url}", ""]
     for i in range(n):
         seed = h + i * 97
-        clinic = f"{_CLINIC_WORDS[seed % len(_CLINIC_WORDS)]} Physiotherapy Clinic"
+        clinic = f"{_CLINIC_WORDS[seed % len(_CLINIC_WORDS)]} Psychiatry Clinic"
         doctor = f"Dr. {_DOCTORS[(seed // 7) % len(_DOCTORS)]}"
         city = _CITIES[(seed // 13) % len(_CITIES)]
         phone = f"+91-98{(seed % 90000000) + 10000000}"
-        domain = clinic.split()[0].lower() + "physio.in"
+        domain = clinic.split()[0].lower() + "psych.in"
         lines.append(
             f"{i + 1}. {clinic} — {doctor}, {10 + (seed % 90)} MG Road, {city}. "
             f"Phone: {phone}. Email: contact@{domain}. Web: https://{domain}"
@@ -323,7 +323,7 @@ async def draft_pitch(lead: dict) -> str:
         where = f" in {city}" if city else ""
         return (
             f"Hi {name}, I noticed {clinic}{where} and how no-shows quietly erode "
-            f"physiotherapy revenue. Vytal cuts missed appointments with WhatsApp "
+            f"psychiatry revenue. Vytal cuts missed appointments with WhatsApp "
             f"reminders and recovery nudges. Open to {PERSONA_OFFER}? — {PERSONA_FROM}"
         )
 
