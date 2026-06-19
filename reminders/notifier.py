@@ -21,6 +21,11 @@ import urllib.request
 
 _API_BASE = "https://discord.com/api/v10"
 _TIMEOUT_S = 15
+# Discord's API sits behind Cloudflare and REQUIRES a User-Agent. Bare urllib
+# (no UA) is blocked with HTTP 403 "error code: 1010", so EVERY delivery silently
+# failed (`notify returned False`). This is Discord's documented bot-UA format.
+# (Same Cloudflare-1010 class of bug we hit with Groq in lib/llm.py.)
+_USER_AGENT = "DiscordBot (https://github.com/hermes-agent, 1.0)"
 
 
 def _post(url: str, data: bytes, headers: dict[str, str]) -> None:
@@ -71,6 +76,7 @@ def send_message(content: str, *, user_id: str | None = None) -> bool:
     headers = {
         "Authorization": f"Bot {token}",
         "Content-Type": "application/json",
+        "User-Agent": _USER_AGENT,
     }
 
     for attempt in (1, 2):
