@@ -15,7 +15,9 @@
 > pull into the morning briefing; Calendar adds a Discord `calendar` intent (add/list); the bridge
 > summarizes a pasted Claude session into USER.md + Discord. NOT yet deployed — gated on: enable
 > Calendar API on `vytal-499305`, share Arnav's calendar with `vytal-732@vytal-499305.iam.gserviceaccount.com`,
-> add `GARMIN_EMAIL`/`GARMIN_PASSWORD` to `.env`. See §10.**) Prior 2026-06-18: (**Hamza → Jack unification — DONE, incl. live VPS.** The
+> add `GARMIN_EMAIL`/`GARMIN_PASSWORD` to `.env`. **DEPLOYED same day** — Calendar verified live
+> (no 403, API + share working); Garmin login is 429 rate-limited on the VPS IP (degrades cleanly,
+> sleep omitted from briefing until it clears). 193 tests. See §10.**) Prior 2026-06-18: (**Hamza → Jack unification — DONE, incl. live VPS.** The
 > two-persona model (Jack in DMs / Hamza in the Vytal group) is retired → **one unified `Jack`
 > persona on both surfaces**. Local repo + git baseline done (13 intent tests pass). **Live-VPS
 > cutover EXECUTED** on `personal-os`: renamed `~/.hermes/{hamza_worker→jack_worker,
@@ -204,8 +206,10 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 - ✅ Zero-token reminders that always deliver (no LLM at fire time).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
 
-**Built 2026-06-20 (local only — not yet deployed):** three new `integrations/` modules, all with
-lazy imports + graceful degradation (they no-op when creds/libs absent), 21 new tests, 191 total green:
+**Built + DEPLOYED 2026-06-20:** three new `integrations/` modules, all with lazy imports + graceful
+degradation (they no-op when creds/libs absent), 23 new tests, 193 total green. Live on the VPS:
+Calendar verified working (read, no 403); Garmin login 429 rate-limited on the VPS IP so sleep is
+omitted from the briefing until it clears; calendar write (add_event) pending a live Discord test.
 - **Garmin** (`integrations/garmin.py`) — `GarminClient.sleep_summary_text()`; pulled into the morning
   briefing when `JACK_GARMIN_ENABLED=1` + `GARMIN_EMAIL`/`GARMIN_PASSWORD` set. (Login is fragile by nature.)
 - **Google Calendar** (`integrations/calendar.py`) — service-account auth against `~/.hermes/credentials.json`;

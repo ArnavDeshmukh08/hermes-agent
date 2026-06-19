@@ -129,6 +129,34 @@ def test_malformed_response_returns_none(
 
 
 # ---------------------------------------------------------------------------
+# Test 4b — present-but-empty DTO (zero/missing sleep) → None, not "0.0h sleep"
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "dto",
+    [
+        {"deepSleepSeconds": 0},                       # no sleepTimeSeconds key
+        {"sleepTimeSeconds": 0, "deepSleepSeconds": 0},  # explicit zero
+    ],
+)
+def test_zero_sleep_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+    dto: dict,
+) -> None:
+    """A non-empty response whose DTO has no real sleep (0 / missing seconds)
+    must degrade to None — never a misleading '0.0h sleep' in the briefing.
+    Reproduces the live VPS case where a rate-limited login returned a stub DTO.
+    """
+    fake_garmin = FakeGarmin(response={"dailySleepDTO": dto})
+
+    client = GarminClient(email="x@example.com", password="secret")
+    monkeypatch.setattr(client, "_login", lambda: fake_garmin)
+
+    assert client.last_night_sleep() is None
+    assert client.sleep_summary_text() == ""
+
+
+# ---------------------------------------------------------------------------
 # Test 5 — garminconnect ImportError is swallowed inside _login
 # ---------------------------------------------------------------------------
 

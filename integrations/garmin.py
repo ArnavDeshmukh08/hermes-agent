@@ -115,6 +115,14 @@ class GarminClient:
             deep_h = _secs_to_h("deepSleepSeconds")
             rem_h = _secs_to_h("remSleepSeconds")
 
+            # A present-but-empty DTO (no sleepTimeSeconds, or 0) means Garmin
+            # has no actual sleep for this day — e.g. the device never synced, or
+            # login was rate-limited and returned a stub. Real sleep is never 0s,
+            # so treat 0 as "unavailable" and degrade to None rather than
+            # reporting a misleading "0.0h sleep" in the briefing.
+            if total_sleep_h <= 0:
+                return None
+
             # score lives at sleepScores.overall.value — all optional
             sleep_scores = raw.get("sleepScores") or {}
             overall = sleep_scores.get("overall") or {}
