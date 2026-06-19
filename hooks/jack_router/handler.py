@@ -177,11 +177,22 @@ def _fmt_ist(value) -> str:
     return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%-I:%M %p IST, %a %b %-d")
 
 
+# Leading conversational filler ("yeah ok so remind me ...") — repeatable, case-insensitive.
+_FILLER_RE = re.compile(
+    r"^(?:\s*(?:yeah|yea|ok|okay|sure|alright|hey|so|yo|please)\b[\s,]*)+",
+    re.IGNORECASE,
+)
+# Command prefixes, most-specific first so the time-embedded forms ("remind me at 11am that")
+# win before the bare "remind me " catch-all.
 _REMINDER_TRIGGER_RE = re.compile(
-    r"^\s*(?:please\s+)?(?:remind me(?:\s+to|\s+about|\s+that)?|"
-    r"reminder\s+(?:for|to|about)|don'?t let me forget(?:\s+to|\s+about)?|"
-    r"set(?:\s+up)?\s+an?\s+(?:alarm|reminder)(?:\s+to|\s+for|\s+about)?|"
-    r"alert me(?:\s+to|\s+when|\s+about|\s+that|\s+if)?)\s+",
+    r"^\s*(?:"
+    r"remind me\s+at\b.*?\b(?:that|to)\s+|"  # remind me at <time> that/to
+    r"remind me\s+(?:to|about)\s+|remind me\s+|"
+    r"reminder\s+(?:for|to|about)\s+|"
+    r"set(?:\s+up)?\s+an?\s+(?:alarm|reminder)\s+(?:for|to|about)\s+|"
+    r"don'?t let me forget\s+(?:(?:to|that|about)\s+)?|"
+    r"alert me\s+(?:to|when|about|that|if)\s+"
+    r")",
     re.IGNORECASE,
 )
 _TIME_TAIL_RE = re.compile(
@@ -191,10 +202,16 @@ _TIME_TAIL_RE = re.compile(
 
 
 def _reminder_message(text: str) -> str:
-    """Extract the task: 'remind me to call mom at 9am tomorrow' -> 'call mom'."""
-    t = _REMINDER_TRIGGER_RE.sub("", text.strip())
+    """Extract the task: 'remind me to call mom at 9am tomorrow' -> 'call mom'.
+
+    Strip order: leading filler -> command prefix (time-embedded form first) -> trailing
+    time clause. Falls back to the original stripped text if everything got stripped.
+    """
+    original = text.strip()
+    t = _FILLER_RE.sub("", original)
+    t = _REMINDER_TRIGGER_RE.sub("", t)
     t = _TIME_TAIL_RE.sub("", t).strip(" .,!?")
-    return t or text.strip()
+    return t or original
 
 
 def _match_reminder(text: str, items: list):
