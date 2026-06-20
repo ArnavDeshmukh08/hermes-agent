@@ -87,6 +87,14 @@ _CALENDAR_RE = re.compile(
     r"(?:add|put|create|book|insert|log|schedule)\b[^.!?]*"
     r"\b(?:calendar|appointment|meeting|event)\b"
     r"|"
+    # Activity bookings: "add a gym session", "log a workout", "create a yoga class".
+    r"(?:add|put|create|book|insert|log|schedule)\b[^.!?]*"
+    r"\b(?:session|workout|class|practice|training|rehearsal|lesson)\b"
+    r"|"
+    # Bare "schedule a X" / "book a X" (a meeting, a call, the dentist) — guarded so
+    # "schedule a reminder/alarm" still falls through to the reminder branch.
+    r"(?:schedule|book)\s+(?:a|an|my|the)\s+(?!reminder\b|alarm\b)\w+"
+    r"|"
     r"(?:what'?s?\s+on|show|list|view|check|see)\b[^.!?]*"
     r"\b(?:calendar|schedule|agenda)\b"
     r"|"
@@ -134,6 +142,20 @@ _SELF_SETTING_NOUN_RE = re.compile(
 )
 _SELF_CONFIG_VERB_RE = re.compile(
     r"\b(?:change|set|update|turn\s+on|turn\s+off|enable|disable|switch\s+on|switch\s+off)\b",
+    re.IGNORECASE,
+)
+# Generic settings-change phrasing: any "change/set/update/modify/adjust the X setting",
+# or a "configure ..." request. Routes even UNKNOWN settings to self_config so Jack can
+# answer honestly ("I don't have that setting — here's what I can configure") instead of
+# the agent brain refusing with a capability denial. Requires the literal word
+# "setting(s)" (or the verb "configure") so ordinary chat like "change my plan" stays
+# conversational.
+_SELF_GENERIC_RE = re.compile(
+    r"\b(?:"
+    r"(?:change|set|update|modify|adjust|configure)\b[^.!?]*\bsettings?\b"
+    r"|"
+    r"configure\s+(?:my\s+|the\s+)?\w+"
+    r")",
     re.IGNORECASE,
 )
 
@@ -197,7 +219,7 @@ def classify(text: str) -> Route | None:
         return Route("self_config", {"action": "status", "text": t})
     if _SELF_LIST_RE.search(t):
         return Route("self_config", {"action": "list", "text": t})
-    if _SELF_CONFIG_VERB_RE.search(t) and _SELF_SETTING_NOUN_RE.search(t):
+    if (_SELF_CONFIG_VERB_RE.search(t) and _SELF_SETTING_NOUN_RE.search(t)) or _SELF_GENERIC_RE.search(t):
         return Route("self_config", {"action": "set", "text": t})
     return Route("conversational", {"text": t})
 

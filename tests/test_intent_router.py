@@ -65,6 +65,23 @@ class ClassifyTest(unittest.TestCase):
         # 'find' + 'leads' would match lead, but reminder is checked first.
         self.assertEqual(router.classify("remind me to find 5 clinics in Pune").intent, "reminder")
 
+    def test_calendar_activity_and_schedule_phrasings(self):
+        # Broadened calendar add-branch: activity sessions + bare "schedule/book a X".
+        for s in (
+            "add a gym session next Monday at 7pm",
+            "log a workout tomorrow at 6am",
+            "schedule a call with the team tomorrow",
+            "book a dentist appointment Tuesday",
+        ):
+            r = router.classify(s)
+            self.assertEqual(r.intent, "calendar", f"{s!r} -> {r.intent}")
+            self.assertEqual(r.params.get("action"), "add", s)
+
+    def test_calendar_schedule_does_not_steal_reminder(self):
+        # "schedule a reminder/alarm" must stay a reminder, not calendar.
+        for s in ("schedule a reminder for 5pm", "set up an alarm for 6am"):
+            self.assertEqual(router.classify(s).intent, "reminder", s)
+
     def test_reminder_intent_not_triggered_by_why_question(self):
         # Asking *about* the agenda question is conversation, not a reminder.
         r = router.classify("why did you ask for the agenda")

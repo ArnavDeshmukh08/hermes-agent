@@ -366,6 +366,7 @@ def _extract_event_title(text: str) -> str:
     t = _CAL_STRIP_RE.sub(" ", text)
     t = _TIME_STRIP_RE.sub("", t)
     t = re.sub(r"\s+", " ", t).strip(" .,!?")
+    t = re.sub(r"^(?:a|an|the|my)\s+", "", t, flags=re.IGNORECASE)  # drop leading article ("a gym session")
     return t or text.strip()
 
 

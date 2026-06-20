@@ -186,6 +186,25 @@ class TestSelfConfigClassify(unittest.TestCase):
         self.assertIsNotNone(r)
         self.assertNotEqual(r.intent, "self_config")
 
+    def test_set_unknown_setting_still_routes(self):
+        # An UNKNOWN setting must still route to self_config so Jack can answer
+        # honestly ("I don't have that setting") instead of a capability denial.
+        for s in (
+            "change the quantum setting to maximum",
+            "update the foobar setting to 5",
+            "configure my dashboard",
+        ):
+            r = router.classify(s)
+            self.assertIsNotNone(r, s)
+            self.assertEqual(r.intent, "self_config", f"{s!r} -> {r.intent}")
+            self.assertEqual(r.params.get("action"), "set", s)
+
+    def test_generic_does_not_steal_plain_chat(self):
+        # No "setting(s)" word and no known noun => stays conversational.
+        for s in ("change my plan for the day", "set the table for dinner"):
+            r = router.classify(s)
+            self.assertEqual(r.intent, "conversational", f"{s!r} -> {r.intent}")
+
 
 # ---------------------------------------------------------------------------
 # B.  Handler tests
