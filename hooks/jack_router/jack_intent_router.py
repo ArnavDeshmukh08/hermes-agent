@@ -110,6 +110,24 @@ _CALENDAR_LIST_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Proactive control intents. Checked AFTER self_config and BEFORE conversational.
+# ---------------------------------------------------------------------------
+_PROACTIVE_CONTROL_RE = re.compile(
+    r"\b(?:stop|pause|mute|silence|quiet|disable|turn\s+off|enable|turn\s+on|resume|unmute|unpause)\b"
+    r"[^.!?]*\b(?:proactive|nudge|nudges|nudging|check[\s-]?ins?|pings?)\b"
+    r"|"
+    r"\b(?:turn\s+)?(?:proactive|nudges?|check[\s-]?ins?)\b[^.!?]*\b(?:on|off|stop|pause|mute|enable|disable)\b",
+    re.IGNORECASE,
+)
+_PROACTIVE_STATUS_RE = re.compile(
+    r"\b(?:are\s+(?:proactive\s+)?nudges?\s+(?:on|off|enabled|active|disabled)|"
+    r"(?:my\s+|show\s+my\s+)?(?:proactive|nudge)\s+(?:status|settings)|"
+    r"how\s+many\s+(?:proactive\s+)?(?:nudges?|check[\s-]?ins?)\s+(?:today|so\s+far)|"
+    r"are\s+you\s+(?:going\s+to\s+)?nudg\w+\s+me)\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
 # Self-config intents. Checked AFTER calendar/reminder so those still win.
 # ---------------------------------------------------------------------------
 # status: asking whether Jack/systems are up. Distinct from task-queue _STATUS_RE
@@ -160,6 +178,23 @@ _SELF_GENERIC_RE = re.compile(
 )
 
 
+def _proactive_control_value(t: str) -> str:
+    """Return 'off' for stop/pause/mute/disable verbs, 'on' for enable/resume verbs.
+
+    Checks for explicit on/off indicators or infers from verb choice."""
+    off_verbs = re.compile(r"\b(stop|pause|mute|silence|quiet|disable)\b", re.IGNORECASE)
+    on_verbs = re.compile(r"\b(enable|resume|unmute|unpause)\b", re.IGNORECASE)
+    # Check for explicit 'on' or 'off' at the end or as a standalone word
+    off_explicit = re.compile(r"\b(off|turn\s+off)\b", re.IGNORECASE)
+    on_explicit = re.compile(r"\b(on|turn\s+on)\b", re.IGNORECASE)
+
+    if off_verbs.search(t) or off_explicit.search(t):
+        return "off"
+    if on_verbs.search(t) or on_explicit.search(t):
+        return "on"
+    return "off"  # default for ambiguous cases like "nudges off"
+
+
 def _reminder_action(t: str) -> str | None:
     """Return the reminder sub-action ('set' | 'list' | 'cancel') for `t`, or
     None if `t` is not a reminder request. Order matters: cancel and list are
@@ -176,7 +211,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -221,6 +256,12 @@ def classify(text: str) -> Route | None:
         return Route("self_config", {"action": "list", "text": t})
     if (_SELF_CONFIG_VERB_RE.search(t) and _SELF_SETTING_NOUN_RE.search(t)) or _SELF_GENERIC_RE.search(t):
         return Route("self_config", {"action": "set", "text": t})
+    # Proactive control/status — after all operational intents
+    # Status checked first so "are nudges on?" is classified as status, not control.
+    if _PROACTIVE_STATUS_RE.search(t):
+        return Route("proactive", {"action": "status", "text": t})
+    if _PROACTIVE_CONTROL_RE.search(t):
+        return Route("proactive", {"action": "control", "control": _proactive_control_value(t), "text": t})
     return Route("conversational", {"text": t})
 
 

@@ -72,6 +72,11 @@ ALLOWED_KEYS: dict[str, dict[str, Any]] = {
         "service": "hermes-gateway.service",
         "description": "Enable / disable the long-term memory layer",
     },
+    "JACK_PROACTIVE_ENABLED": {
+        "type": "bool",
+        "service": "hermes-gateway.service",
+        "description": "Enable / disable proactive nudges and check-ins",
+    },
 }
 
 # Friendly name -> JACK key.  Module-level so other modules can import it.
@@ -82,6 +87,7 @@ FRIENDLY_TO_KEY: dict[str, str] = {
     "news_enabled": "JACK_NEWS_ENABLED",
     "memory_enabled": "JACK_MEMORY_ENABLED",
     "reminder_poll_seconds": "JACK_REMINDER_POLL_SECONDS",
+    "proactive": "JACK_PROACTIVE_ENABLED",
 }
 
 # Reverse mapping used by list_configurable()

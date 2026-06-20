@@ -292,12 +292,12 @@ def test_log_records_old_value(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_list_configurable_returns_all_six_keys(tmp_path):
+def test_list_configurable_returns_all_seven_keys(tmp_path):
     cfg = _make_cfg(tmp_path, restart_fn=_ok_restart)
     items = cfg.list_configurable()
     keys_returned = {item["key"] for item in items}
     assert keys_returned == set(ALLOWED_KEYS.keys())
-    assert len(items) == 6
+    assert len(items) == 7
 
 
 def test_list_configurable_has_required_fields(tmp_path):
@@ -322,10 +322,11 @@ def test_list_configurable_reflects_current_value(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_friendly_to_key_has_all_six(tmp_path):
-    assert len(FRIENDLY_TO_KEY) == 6
+def test_friendly_to_key_has_all_seven(tmp_path):
+    assert len(FRIENDLY_TO_KEY) == 7
     assert FRIENDLY_TO_KEY["briefing_time"] == "JACK_BRIEFING_TIME_IST"
     assert FRIENDLY_TO_KEY["reminder_poll_seconds"] == "JACK_REMINDER_POLL_SECONDS"
+    assert FRIENDLY_TO_KEY["proactive"] == "JACK_PROACTIVE_ENABLED"
 
 
 # ---------------------------------------------------------------------------

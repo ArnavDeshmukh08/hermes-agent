@@ -486,6 +486,57 @@ async def _run_self_config(message, route) -> None:
         _log(f"self_config failed: {traceback.format_exc()}")
 
 
+async def _run_proactive_control(message, route) -> None:
+    """Toggle proactive nudges on/off. Persists JACK_PROACTIVE_ENABLED via JackSelfConfig."""
+    channel = message.channel
+    control = route.params.get("control", "off")
+    try:
+        from jack_tools.self_config import JackSelfConfig  # lazy import
+
+        c = JackSelfConfig()
+        value = "true" if control == "on" else "false"
+        result = await asyncio.to_thread(c.set, "JACK_PROACTIVE_ENABLED", value)
+        if result.get("success"):
+            if control == "on":
+                await channel.send("🔔 Proactive nudges back on — I'll keep an eye out.")
+            else:
+                await channel.send("🔕 Proactive nudges paused — I'll stay quiet until you turn them back on.")
+        else:
+            await channel.send("❌ Couldn't change that — " + result.get("message", "unknown error"))
+    except Exception as e:  # noqa: BLE001
+        await channel.send("⚠️ Couldn't change that just now — try again?")
+        _log(f"proactive_control failed: {e!r}")
+
+
+async def _run_proactive_status(message, route) -> None:  # noqa: ARG001
+    """Report proactive nudge status: on/off, sent today, quiet hours."""
+    channel = message.channel
+    try:
+        from proactive.engine import ProactiveEngine  # lazy import
+
+        async with _sem():
+            engine = ProactiveEngine()
+            sent_today = await asyncio.to_thread(engine.sent_today_count)
+        enabled = _truthy(os.environ.get("JACK_PROACTIVE_ENABLED", "1"))
+        max_per_day = int(os.environ.get("JACK_PROACTIVE_MAX_PER_DAY", "3"))
+        quiet_start = int(os.environ.get("JACK_PROACTIVE_QUIET_START_IST", "1"))
+        quiet_end = int(os.environ.get("JACK_PROACTIVE_QUIET_END_IST", "8"))
+        status_str = "ON" if enabled else "OFF"
+        await channel.send(
+            f"🔔 Proactive nudges: **{status_str}** · sent today: {sent_today}/{max_per_day} · "
+            f"quiet hours {quiet_start}am–{quiet_end}am IST\n"
+            "Watching for: deadlines, Siddhi check-in, gym, stale goals, Sunday planning, useful news"
+        )
+    except Exception as e:  # noqa: BLE001
+        await channel.send("⚠️ Couldn't fetch proactive status right now — try again shortly.")
+        _log(f"proactive_status failed: {e!r}")  # noqa: BLE001
+
+
+def _truthy(value: str | None) -> bool:
+    """Check if a value represents a truthy state."""
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def _dispatch(adapter, message, route) -> None:
     channel = message.channel
     if route.intent == "status":
@@ -510,6 +561,12 @@ async def _dispatch(adapter, message, route) -> None:
         return
     if route.intent == "self_config":
         _fire(_run_self_config(message, route))
+        return
+    if route.intent == "proactive":
+        if route.params.get("action") == "status":
+            _fire(_run_proactive_status(message, route))
+        else:
+            _fire(_run_proactive_control(message, route))
         return
     if route.intent == "lead":
         p = route.params
