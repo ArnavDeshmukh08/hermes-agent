@@ -1,4 +1,4 @@
-"""Tests for tools.self_config.JackSelfConfig.
+"""Tests for jack_tools.self_config.JackSelfConfig.
 
 All file I/O uses pytest tmp_path.
 systemctl is always monkeypatched — never called for real.
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-import tools.self_config as sc_mod
-from tools.self_config import (
+import jack_tools.self_config as sc_mod
+from jack_tools.self_config import (
     ALLOWED_KEYS,
     FRIENDLY_TO_KEY,
     JackSelfConfig,

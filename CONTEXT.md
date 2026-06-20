@@ -12,7 +12,7 @@
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
 > Last meaningful update: 2026-06-20. (**Jack self-management shipped + DEPLOYED:** Jack can now
 > configure his OWN settings from Discord — a `self_config` intent (set/list/status) backed by
-> `tools/self_config.py`, which atomically edits `~/.hermes/.env`, logs to
+> `jack_tools/self_config.py`, which atomically edits `~/.hermes/.env`, logs to
 > `~/.hermes/logs/self_config.log`, restarts the owning systemd `--user` service, and **only
 > confirms success after verifying the service is active** (never lies about an unapplied change;
 > keys validated against an allowlist, service names against a fixed set — no shell). Also: **calendar
@@ -220,7 +220,7 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
 
 **Built + DEPLOYED 2026-06-20 (self-management round):** Jack now manages himself from chat.
-- ✅ **Self-config** (`tools/self_config.py`) — `JackSelfConfig` reads/writes `~/.hermes/.env` atomically
+- ✅ **Self-config** (`jack_tools/self_config.py`) — `JackSelfConfig` reads/writes `~/.hermes/.env` atomically
   (temp+`os.replace`, mode 0600), logs every change, restarts the owning systemd `--user` service and
   verifies it is `active` before confirming. Allowed keys: `JACK_BRIEFING_TIME_IST`, `JACK_BRIEFING_ENABLED`,
   `JACK_WEATHER_ENABLED`, `JACK_NEWS_ENABLED`, `JACK_REMINDER_POLL_SECONDS`, `JACK_MEMORY_ENABLED`. Security:

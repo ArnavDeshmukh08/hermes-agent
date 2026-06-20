@@ -217,7 +217,7 @@ class TestHandlerSelfConfigStatus(unittest.TestCase):
         msg = _make_message("are you running okay?")
         route = router.Route("self_config", {"action": "status", "text": "are you running okay?"})
         mock_c = _fake_self_config(get_status=get_status_dict)
-        with patch("tools.self_config.JackSelfConfig", return_value=mock_c):
+        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c):
             _run(handler._run_self_config(msg, route))
         return msg.channel.sent
 
@@ -249,7 +249,7 @@ class TestHandlerSelfConfigList(unittest.TestCase):
         msg = _make_message("what can I configure")
         route = router.Route("self_config", {"action": "list", "text": "what can I configure"})
         mock_c = _fake_self_config()
-        with patch("tools.self_config.JackSelfConfig", return_value=mock_c):
+        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c):
             _run(handler._run_self_config(msg, route))
         combined = " ".join(msg.channel.sent)
         self.assertIn("briefing_time", combined)
@@ -264,7 +264,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         mock_c = _fake_self_config(set_result={"success": True, "message": "Updated JACK_BRIEFING_TIME_IST to 08:00."})
         parsed_val = {"key": "JACK_BRIEFING_TIME_IST", "value": "08:00"}
         with (
-            patch("tools.self_config.JackSelfConfig", return_value=mock_c),
+            patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=parsed_val),
         ):
             _run(handler._run_self_config(msg, route))
@@ -279,7 +279,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         mock_c = _fake_self_config(set_result={"success": False, "message": "'25:00' is not a valid time."})
         parsed_val = {"key": "JACK_BRIEFING_TIME_IST", "value": "25:00"}
         with (
-            patch("tools.self_config.JackSelfConfig", return_value=mock_c),
+            patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=parsed_val),
         ):
             _run(handler._run_self_config(msg, route))
@@ -294,7 +294,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         route = router.Route("self_config", {"action": "set", "text": "change the thing to something"})
         mock_c = _fake_self_config()
         with (
-            patch("tools.self_config.JackSelfConfig", return_value=mock_c),
+            patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=None),
         ):
             _run(handler._run_self_config(msg, route))
@@ -315,7 +315,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         mock_c.set.side_effect = RuntimeError("disk full")
         parsed_val = {"key": "JACK_WEATHER_ENABLED", "value": "false"}
         with (
-            patch("tools.self_config.JackSelfConfig", return_value=mock_c),
+            patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=parsed_val),
         ):
             _run(handler._run_self_config(msg, route))

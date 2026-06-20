@@ -25,6 +25,7 @@ import hashlib
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 
 HOOK_DIR = Path(__file__).resolve().parent
@@ -376,8 +377,8 @@ def _parse_config_request(text: str) -> dict | None:
     Module-level so tests can monkeypatch it directly.
     """
     try:
+        from jack_tools.self_config import FRIENDLY_TO_KEY  # lazy import
         from lib.llm import complete  # lazy import
-        from tools.self_config import FRIENDLY_TO_KEY  # lazy import
 
         friendly_keys = ", ".join(FRIENDLY_TO_KEY.keys())
         system = (
@@ -422,7 +423,7 @@ async def _run_self_config(message, route) -> None:
     action = route.params.get("action", "status")
     text = route.params.get("text", "")
     try:
-        from tools.self_config import JackSelfConfig  # lazy import
+        from jack_tools.self_config import JackSelfConfig  # lazy import
 
         c = JackSelfConfig()
 
@@ -479,9 +480,9 @@ async def _run_self_config(message, route) -> None:
         else:
             await channel.send("❌ Couldn't update that — " + result["message"])
 
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         await channel.send("⚠️ Self-config glitch — try that again?")
-        _log(f"self_config failed: {e!r}")
+        _log(f"self_config failed: {traceback.format_exc()}")
 
 
 async def _dispatch(adapter, message, route) -> None:
