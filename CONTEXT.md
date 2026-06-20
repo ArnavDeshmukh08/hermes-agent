@@ -10,7 +10,7 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-20. (**Jack self-management shipped + DEPLOYED:** Jack can now
+> Last meaningful update: 2026-06-21. (**Jack self-management shipped + DEPLOYED:** Jack can now
 > configure his OWN settings from Discord — a `self_config` intent (set/list/status) backed by
 > `jack_tools/self_config.py`, which atomically edits `~/.hermes/.env`, logs to
 > `~/.hermes/logs/self_config.log`, restarts the owning systemd `--user` service, and **only
@@ -203,7 +203,7 @@ software-development, etc.).
 - Cold outreach must respect anti-spam / DPDP; protect sender reputation.
 - Prefer free + reliable over clever + fragile.
 
-## 10. Current status (2026-06-15)
+## 10. Current status (2026-06-21)
 > Status corrected against a verified read-only VPS audit on 2026-06-15 — see
 > [docs/AUDIT.md](./docs/AUDIT.md). The prior "interactive chat fast + clean" note was stale.
 
@@ -218,6 +218,25 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 **Working:**
 - ✅ Zero-token reminders that always deliver (no LLM at fire time).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
+
+**Built + DEPLOYED 2026-06-21:** Proactive Jack — autonomous nudge engine.
+- ✅ **`proactive/engine.py` — ProactiveEngine**: monitors Arnav's life context every 15 min and decides
+  what to surface. Watches: deadlines (reminders/calendar/USER.md), Siddhi contact gap, gym window (7–10pm),
+  stale goals, Sunday planning nudge, news/body-battery P3 hints. P1=critical (alone), P2=important (max 2),
+  P3=useful (max 1). 6h dedup per nudge type; daily cap (max 3); quiet hours 1–8am IST hard block.
+  Flock+atomic `proactive_log.json` I/O (mirrors ReminderStore). Hot-reloads `JACK_PROACTIVE_ENABLED`
+  from `.env` each cycle so a Discord toggle takes effect within one poll without a service restart.
+- ✅ **`proactive/scorer.py` — PriorityScorer**: pure stateless P1/P2/P3 selection logic; `alone` flag
+  enforced; tone prefixes (🚨 P1 / 💬 P2 / 💡 P3).
+- ✅ **`proactive/scheduler.py` — ProactiveScheduler**: 15-min poll loop, mirrors `briefing/morning.py`
+  (sliced sleep, SIGTERM handling, `_load_env`). Logs every cycle to `~/.hermes/logs/proactive.log`.
+- ✅ **`systemd/jack-proactive.service`**: 4th service deployed. All 4 services active (NRestarts=0).
+- ✅ **`proactive` Discord intents**: `PROACTIVE_CONTROL` (mute/pause/resume nudges) +
+  `PROACTIVE_STATUS` (how many sent today, what's being watched). Persists via `jack_tools/self_config`.
+- ✅ **Live verified**: fired a real P1 deadline nudge within 14 seconds of service start. `proactive_log.json`
+  created. Commit `a27f7dd`, 389 tests (78 new), ruff-clean.
+- Security fixes applied: daily cap re-checked per-send (concurrent-cycle guard); `alone` flag enforced
+  in P2/P3 select; quiet-hours guard added inside `run_cycle()` itself (defence-in-depth).
 
 **Built + DEPLOYED 2026-06-20 (self-management round):** Jack now manages himself from chat.
 - ✅ **Self-config** (`jack_tools/self_config.py`) — `JackSelfConfig` reads/writes `~/.hermes/.env` atomically
