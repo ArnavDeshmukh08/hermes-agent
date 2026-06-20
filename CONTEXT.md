@@ -10,7 +10,20 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-20. (**New integrations built locally: Garmin sleep + Google
+> Last meaningful update: 2026-06-20. (**Jack self-management shipped + DEPLOYED:** Jack can now
+> configure his OWN settings from Discord — a `self_config` intent (set/list/status) backed by
+> `tools/self_config.py`, which atomically edits `~/.hermes/.env`, logs to
+> `~/.hermes/logs/self_config.log`, restarts the owning systemd `--user` service, and **only
+> confirms success after verifying the service is active** (never lies about an unapplied change;
+> keys validated against an allowlist, service names against a fixed set — no shell). Also: **calendar
+> day-name bug fixed** — the real cause was `reminders/parser.py` having NO day-of-week handling, so
+> "Tuesday at 3pm" dropped the day; now resolves to the next future occurrence (verified live: Tue→Jun 23,
+> next Mon→Jun 22). And **weather + curated AI/startup news** now ride the morning briefing
+> (`briefing/weather.py` via wttr.in — verified live "27°C in Ichalkaranji" — + `briefing/news.py`
+> via ddgs+Groq, both env-gated, graceful). 307 tests green (+114), ruff-clean, security-audited.
+> Deployed to the VPS (gateway/briefing/reminders restarted, NRestarts=0, no tracebacks); commit
+> `472fd48`. Spec corrections made en route: config store is `~/.hermes/.env` not `config.yaml`;
+> date bug was in `parser.py` not `integrations/calendar.py`. Prior same-day: **New integrations built locally: Garmin sleep + Google
 > Calendar + Claude session-bridge — 21 new tests, 191 total green, lint-clean. Garmin/Calendar
 > pull into the morning briefing; Calendar adds a Discord `calendar` intent (add/list); the bridge
 > summarizes a pasted Claude session into USER.md + Discord. NOT yet deployed — gated on: enable
@@ -205,6 +218,21 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 **Working:**
 - ✅ Zero-token reminders that always deliver (no LLM at fire time).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
+
+**Built + DEPLOYED 2026-06-20 (self-management round):** Jack now manages himself from chat.
+- ✅ **Self-config** (`tools/self_config.py`) — `JackSelfConfig` reads/writes `~/.hermes/.env` atomically
+  (temp+`os.replace`, mode 0600), logs every change, restarts the owning systemd `--user` service and
+  verifies it is `active` before confirming. Allowed keys: `JACK_BRIEFING_TIME_IST`, `JACK_BRIEFING_ENABLED`,
+  `JACK_WEATHER_ENABLED`, `JACK_NEWS_ENABLED`, `JACK_REMINDER_POLL_SECONDS`, `JACK_MEMORY_ENABLED`. Security:
+  key allowlist + fixed service set, no `shell=True`, only ever touches `~/.hermes/`.
+- ✅ **`self_config` Discord intent** (set/list/status) — Groq-parsed change requests; replies honestly,
+  never confirms an unverified change ("are you running okay?" → live service status).
+- ✅ **Calendar day-name fix** (`reminders/parser.py`) — adds Mon–Sun resolution (was entirely absent);
+  "Tuesday at 3pm" → next Tuesday; confirmation reformatted to `Added ✅ … — Tue Jun 23 at 3:00 PM IST`.
+- ✅ **Weather + news in briefing** (`briefing/weather.py` wttr.in, `briefing/news.py` ddgs+Groq) — env-gated
+  (`JACK_WEATHER_ENABLED`/`JACK_NEWS_ENABLED` now set on the box), graceful degradation. Weather verified live.
+- Verified on VPS: all prod modules import, `parse_time` cases correct, `get_status` all-active, services
+  restarted with `NRestarts=0` and no tracebacks. 307 tests, commit `472fd48`.
 
 **Built + DEPLOYED 2026-06-20:** three new `integrations/` modules, all with lazy imports + graceful
 degradation (they no-op when creds/libs absent), 23 new tests, 193 total green. Live on the VPS:
