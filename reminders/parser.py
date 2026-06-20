@@ -14,6 +14,36 @@ from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
 
+# Maps day-name / abbreviation → weekday int (Monday=0 … Sunday=6).
+_DAY_MAP: dict[str, int] = {
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "tues": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "thursday": 3,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
+}
+
+# Regex that matches an optional modifier followed by a day name.
+# Groups: (1) modifier ("next"|"this"|"on"|"coming"|None), (2) day token.
+_DAY_RE = re.compile(
+    r"\b(next|this|on|coming)?\s*"
+    r"(monday|mon|tuesday|tues|tue|wednesday|wed"
+    r"|thursday|thurs|thur|thu|friday|fri"
+    r"|saturday|sat|sunday|sun)\b"
+)
+
 # Defaults for fuzzy time-of-day words (IST hours).
 _MORNING_HOUR = 9
 _TONIGHT_HOUR = 21
@@ -82,6 +112,48 @@ def _next_weekday(dt: datetime) -> datetime:
     return dt
 
 
+def _resolve_named_day(
+    modifier: str | None,
+    target_wd: int,
+    now: datetime,
+) -> datetime:
+    """Return the IST date for a named weekday relative to *now* (IST-aware).
+
+    Resolution rules (all computed relative to today's date in IST):
+      - target_wd > current_wd  → this coming occurrence (days_ahead < 7)
+      - target_wd < current_wd  → next week (days_ahead = 7 - current_wd + target_wd)
+      - target_wd == current_wd → NEXT week (+ 7 days), never today
+
+    "next <day>" with modifier="next": if the naïve resolution would land within
+    the same calendar week (days_ahead < 7 and not equal-day), push one more week
+    so "next Tuesday" from Saturday is still Jun 23 — the upcoming Tuesday —
+    because that IS "next" relative to Saturday.  The rule only pushes when the
+    resolved day is BEFORE today in the same week (i.e. days_ahead wraps to next
+    week already), or when target_wd == current_wd.  In practice this means:
+    "next <day>" behaves identically to bare "<day>" for the nearest future
+    occurrence, which is the intuitive reading ("next Tuesday" from Saturday is
+    Jun 23, not Jun 30).
+    """
+    today = now.date()
+    current_wd = today.weekday()  # Monday=0 … Sunday=6
+
+    if target_wd > current_wd:
+        days_ahead = target_wd - current_wd
+    elif target_wd < current_wd:
+        days_ahead = 7 - current_wd + target_wd
+    else:
+        # Same weekday as today → always push to next week.
+        days_ahead = 7
+
+    target_date = today + timedelta(days=days_ahead)
+    return datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        tzinfo=IST,
+    )
+
+
 def parse_time(text: str, now: datetime | None = None) -> ParsedTime:
     """Parse natural-language time `text` (IST) into a ParsedTime in UTC.
 
@@ -134,10 +206,11 @@ def parse_time(text: str, now: datetime | None = None) -> ParsedTime:
     if m:
         amount = int(m.group(1))
         unit = m.group(2)
-        if unit.startswith(("hour", "hr")):
-            delta = timedelta(hours=amount)
-        else:
-            delta = timedelta(minutes=amount)
+        delta = (
+            timedelta(hours=amount)
+            if unit.startswith(("hour", "hr"))
+            else timedelta(minutes=amount)
+        )
         return ParsedTime(fire_at=_to_utc(now + delta), recurring=None)
 
     # ---- Absolute day anchors -------------------------------------------
@@ -170,6 +243,20 @@ def parse_time(text: str, now: datetime | None = None) -> ParsedTime:
     # bare "morning" → tomorrow-ish 9am next occurrence
     if "morning" in raw and clock is None:
         fire = _next_occurrence(now, _MORNING_HOUR, 0)
+        return ParsedTime(fire_at=_to_utc(fire), recurring=None)
+
+    # ---- Named day of week ("Tuesday at 3pm", "next Friday", …) ----------
+    day_match = _DAY_RE.search(raw)
+    if day_match:
+        modifier = day_match.group(1)  # "next" | "this" | "on" | "coming" | None
+        day_token = day_match.group(2)
+        target_wd = _DAY_MAP[day_token]
+        base = _resolve_named_day(modifier, target_wd, now)
+        if clock is not None:
+            hour, minute = clock
+        else:
+            hour, minute = _MORNING_HOUR, 0
+        fire = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
         return ParsedTime(fire_at=_to_utc(fire), recurring=None)
 
     # ---- "at X" → next occurrence today/tomorrow ------------------------

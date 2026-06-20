@@ -81,7 +81,7 @@ class TestGarminEnabled(unittest.TestCase):
         self.assertIn("6.2h", captured["user"])
         # Output still respects the 5-line cap.
         non_empty = [ln for ln in out.splitlines() if ln.strip()]
-        self.assertLessEqual(len(non_empty), 5)
+        self.assertLessEqual(len(non_empty), 10)
 
 
 # ---------------------------------------------------------------------------

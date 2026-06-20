@@ -35,7 +35,7 @@ for _bp in (str(_BOOT_ROOT), str(_BOOT_ROOT / "jack_worker")):
 # IST is UTC+5:30, fixed offset (no DST) — safe as a static timezone.
 _IST = timezone(timedelta(hours=5, minutes=30))
 _DEFAULT_BRIEFING_TIME = "09:00"
-_MAX_LINES = 5
+_MAX_LINES = 10
 _SLEEP_SLICE_S = 60.0
 _BULLET_PREFIXES = ("- ", "* ", "• ")
 
@@ -46,10 +46,15 @@ _SYSTEM_PROMPT = (
     "You are Jack, Arnav's personal assistant and friend. Write his morning "
     "check-in. Be casual and warm, like a friend texting — not a corporate "
     "briefing. Weave in today's reminders, his current priorities, and one "
-    "relevant touch about his life. Keep it SHORT: at most 5 lines. Do NOT use "
+    "relevant touch about his life. Keep it SHORT: at most 10 lines. Do NOT use "
     "bullet points or lists — talk like a real person, in plain sentences. "
     "If sleep or calendar info is given, weave it in naturally — a nudge if he "
-    "slept poorly, a heads-up on his first event."
+    "slept poorly, a heads-up on his first event. "
+    "If weather is given, slip in a quick practical note (good or bad day for a "
+    "gym run, bring water if it's brutal, etc.) — only when it adds something. "
+    "If news items are given, mention 1-2 with a 'by the way — ' style aside, "
+    "only if they're actually relevant to what he's working on right now. "
+    "If weather or news are absent, the briefing should read exactly as before."
 )
 
 
@@ -128,6 +133,28 @@ class MorningBriefing:
         except Exception:  # noqa: BLE001 — outage must never block the briefing
             return ""
 
+    def _weather_block(self) -> str:
+        """Return a one-line weather summary, or '' when disabled/unavailable."""
+        if not _truthy(os.environ.get("JACK_WEATHER_ENABLED")):
+            return ""
+        try:
+            from briefing.weather import WeatherFetcher  # lazy import
+
+            return WeatherFetcher().summary_text() or ""
+        except Exception:  # noqa: BLE001 — outage must never block the briefing
+            return ""
+
+    def _news_block(self) -> str:
+        """Return curated news as text, or '' when disabled/unavailable."""
+        if not _truthy(os.environ.get("JACK_NEWS_ENABLED")):
+            return ""
+        try:
+            from briefing.news import NewsFetcher  # lazy import
+
+            return NewsFetcher().summary_text() or ""
+        except Exception:  # noqa: BLE001 — outage must never block the briefing
+            return ""
+
     # -- data gathering --------------------------------------------------
     def _read_user_md(self) -> str:
         """Read USER.md fresh each call; empty string if missing/unreadable."""
@@ -174,6 +201,8 @@ class MorningBriefing:
 
         sleep_block = self._garmin_block()
         events_block = self._calendar_block(user_id, now)
+        weather_block = self._weather_block()
+        news_block = self._news_block()
 
         user_prompt = (
             "Here is what you know about Arnav (USER.md):\n"
@@ -182,6 +211,8 @@ class MorningBriefing:
             f"{reminder_block}\n\n"
             + (f"Today's calendar:\n{events_block}\n\n" if events_block else "")
             + (f"Last night's sleep (Garmin):\n{sleep_block}\n\n" if sleep_block else "")
+            + (f"Weather today:\n{weather_block}\n\n" if weather_block else "")
+            + (f"Relevant news:\n{news_block}\n\n" if news_block else "")
             + "Write his morning check-in now."
         )
 

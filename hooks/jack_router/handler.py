@@ -340,7 +340,7 @@ async def _run_calendar(message, route) -> None:
                 )
                 return
 
-            when_str = start_ist.strftime("%-I:%M %p IST, %a %b %-d")
+            when_str = start_ist.strftime("%a %b %-d at %-I:%M %p IST")
             await channel.send(f"Added ✅ {result['summary']} — {when_str}")
     except Exception as e:  # noqa: BLE001 — never crash the gateway on a calendar error
         await channel.send("📅 Calendar glitch — try that again?")
@@ -368,6 +368,122 @@ def _extract_event_title(text: str) -> str:
     return t or text.strip()
 
 
+def _parse_config_request(text: str) -> dict | None:
+    """Extract {key, value} from a config-change request using the LLM.
+
+    Returns a dict with JACK_* key and string value (ready for c.set()), or
+    None if parsing fails or the request is not a config change.
+    Module-level so tests can monkeypatch it directly.
+    """
+    try:
+        from lib.llm import complete  # lazy import
+        from tools.self_config import FRIENDLY_TO_KEY  # lazy import
+
+        friendly_keys = ", ".join(FRIENDLY_TO_KEY.keys())
+        system = (
+            "You extract configuration-change requests into JSON.\n"
+            f"The configurable settings (friendly names) are: {friendly_keys}.\n"
+            "Return ONLY valid JSON with exactly two fields:\n"
+            '  "key": one of the friendly names above (string)\n'
+            '  "value": the new value — times as "HH:MM" 24h, booleans as true/false, ints as number\n'
+            "If the message is NOT a config change request, return: null\n\n"
+            "Examples:\n"
+            '  "change briefing to 8am" -> {"key": "briefing_time", "value": "08:00"}\n'
+            '  "turn off weather" -> {"key": "weather_enabled", "value": false}\n'
+            '  "enable news" -> {"key": "news_enabled", "value": true}\n'
+            '  "set reminder frequency to 60 seconds" -> {"key": "reminder_poll_seconds", "value": 60}\n'
+            '  "disable memory" -> {"key": "memory_enabled", "value": false}\n'
+        )
+        raw = complete(system, text, max_tokens=200, prefer="groq", json_only=True, timeout=20)
+
+        import json  # lazy import
+
+        parsed = json.loads(raw)
+        if parsed is None:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        friendly = parsed.get("key")
+        value = parsed.get("value")
+        if not friendly or value is None:
+            return None
+        jack_key = FRIENDLY_TO_KEY.get(str(friendly))
+        if jack_key is None:
+            return None
+        return {"key": jack_key, "value": str(value) if not isinstance(value, bool) else ("true" if value else "false")}
+    except Exception as e:  # noqa: BLE001
+        _log(f"_parse_config_request failed: {e!r}")
+        return None
+
+
+async def _run_self_config(message, route) -> None:
+    """Handle self_config intent: status / list / set."""
+    channel = message.channel
+    action = route.params.get("action", "status")
+    text = route.params.get("text", "")
+    try:
+        from tools.self_config import JackSelfConfig  # lazy import
+
+        c = JackSelfConfig()
+
+        if action == "status":
+            try:
+                st = await asyncio.to_thread(c.get_status)
+                if all(v == "active" for v in st.values()):
+                    await channel.send("All systems running ✅")
+                else:
+                    lines = [f"• {svc}: {state}" for svc, state in sorted(st.items())]
+                    await channel.send("System status:\n" + "\n".join(lines))
+            except Exception as e:  # noqa: BLE001
+                await channel.send("⚠️ Couldn't check system status right now — try again shortly.")
+                _log(f"self_config status failed: {e!r}")
+            return
+
+        if action == "list":
+            try:
+                items = await asyncio.to_thread(c.list_configurable)
+                parts = []
+                for item in items:
+                    friendly = item["friendly"] or item["key"]
+                    val = item["value"] if item["value"] is not None else "not set"
+                    desc = item["description"]
+                    parts.append(f"• {friendly} (currently {val}) — {desc}")
+                await channel.send("Here's what I can configure:\n" + "\n".join(parts))
+            except Exception as e:  # noqa: BLE001
+                await channel.send("⚠️ Couldn't fetch settings — try again shortly.")
+                _log(f"self_config list failed: {e!r}")
+            return
+
+        # action == "set"
+        parsed = _parse_config_request(text)
+        if parsed is None:
+            try:
+                items = await asyncio.to_thread(c.list_configurable)
+                friendly_list = ", ".join(item["friendly"] or item["key"] for item in items)
+            except Exception:  # noqa: BLE001
+                friendly_list = "briefing_time, briefing_enabled, weather_enabled, news_enabled, memory_enabled, reminder_poll_seconds"
+            await channel.send(
+                f"I couldn't tell which setting you meant. Here's what I can change: {friendly_list}."
+            )
+            return
+
+        try:
+            result = await asyncio.to_thread(c.set, parsed["key"], parsed["value"])
+        except Exception as e:  # noqa: BLE001
+            await channel.send(f"❌ Something went wrong trying to update that setting: {type(e).__name__}")
+            _log(f"self_config set exception: {e!r}")
+            return
+
+        if result["success"]:
+            await channel.send("✅ Done — " + result["message"])
+        else:
+            await channel.send("❌ Couldn't update that — " + result["message"])
+
+    except Exception as e:  # noqa: BLE001
+        await channel.send("⚠️ Self-config glitch — try that again?")
+        _log(f"self_config failed: {e!r}")
+
+
 async def _dispatch(adapter, message, route) -> None:
     channel = message.channel
     if route.intent == "status":
@@ -389,6 +505,9 @@ async def _dispatch(adapter, message, route) -> None:
         return
     if route.intent == "calendar":
         _fire(_run_calendar(message, route))
+        return
+    if route.intent == "self_config":
+        _fire(_run_self_config(message, route))
         return
     if route.intent == "lead":
         p = route.params

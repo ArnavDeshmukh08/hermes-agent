@@ -101,6 +101,42 @@ _CALENDAR_LIST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Self-config intents. Checked AFTER calendar/reminder so those still win.
+# ---------------------------------------------------------------------------
+# status: asking whether Jack/systems are up. Distinct from task-queue _STATUS_RE
+# (which only matches bare single-word inputs like "status" or "queue").
+_SELF_STATUS_RE = re.compile(
+    r"\b(?:"
+    r"are\s+you\s+(?:running\s+|doing\s+)?(?:ok|okay|alright|good)\b|"
+    r"what'?s?\s+your\s+status\b|"
+    r"you\s+(?:up|alive|online)\s*\??|"
+    r"system\s+status\b|"
+    r"everything\s+(?:ok|running)\b"
+    r")",
+    re.IGNORECASE,
+)
+# list: asking what settings are available.
+_SELF_LIST_RE = re.compile(
+    r"\b(?:"
+    r"what\s+can\s+i\s+configure\b|"
+    r"what\s+(?:can|do)\s+you\s+let\s+me\s+(?:change|configure)\b|"
+    r"list\s+(?:your\s+)?settings\b|"
+    r"(?:show|what\s+are)\s+your\s+settings\b"
+    r")",
+    re.IGNORECASE,
+)
+# set: a change request to a known setting noun + a config verb.
+# Guard: message must reference a known setting noun AND a config verb.
+_SELF_SETTING_NOUN_RE = re.compile(
+    r"\b(?:briefing(?:\s+time)?|weather|news|memory|reminder\s+(?:poll|frequency|interval))\b",
+    re.IGNORECASE,
+)
+_SELF_CONFIG_VERB_RE = re.compile(
+    r"\b(?:change|set|update|turn\s+on|turn\s+off|enable|disable|switch\s+on|switch\s+off)\b",
+    re.IGNORECASE,
+)
+
 
 def _reminder_action(t: str) -> str | None:
     """Return the reminder sub-action ('set' | 'list' | 'cancel') for `t`, or
@@ -118,7 +154,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -155,6 +191,14 @@ def classify(text: str) -> Route | None:
         return Route("outreach", params)
     if re.search(_LEAD_VERBS, t, re.IGNORECASE) and re.search(_LEAD_NOUNS, t, re.IGNORECASE):
         return Route("lead", _parse_lead(t))
+    # Self-config branch — after all operational intents so calendar/reminder/lead
+    # still win for their phrasings. Three actions: status / list / set.
+    if _SELF_STATUS_RE.search(t):
+        return Route("self_config", {"action": "status", "text": t})
+    if _SELF_LIST_RE.search(t):
+        return Route("self_config", {"action": "list", "text": t})
+    if _SELF_CONFIG_VERB_RE.search(t) and _SELF_SETTING_NOUN_RE.search(t):
+        return Route("self_config", {"action": "set", "text": t})
     return Route("conversational", {"text": t})
 
 

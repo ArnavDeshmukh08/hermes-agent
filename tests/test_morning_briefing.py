@@ -72,7 +72,7 @@ class MorningBriefingTests(unittest.TestCase):
         out = briefing.compile_briefing("42", now=self.now)
 
         # Assert
-        self.assertLessEqual(len([ln for ln in out.splitlines() if ln.strip()]), 5)
+        self.assertLessEqual(len([ln for ln in out.splitlines() if ln.strip()]), 10)
 
     def test_briefing_uses_casual_tone(self):
         # Arrange: model slips into bullets.
