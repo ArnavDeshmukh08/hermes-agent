@@ -652,6 +652,7 @@ class TestRunCycleHappyPath:
 
     def test_run_cycle_happy_path_logs(self, tmp_path, monkeypatch):
         monkeypatch.setenv("JACK_PROACTIVE_ENABLED", "1")
+        monkeypatch.setenv("JACK_PROACTIVE_ENGINE", "legacy")
         now = _ist(14)
 
         calls: list[str] = []
@@ -745,3 +746,157 @@ class TestNeverMoreThanThreePerDay:
                     eng.log_sent(item, now=now)
 
         assert len(send_log) <= max_per_day
+
+
+# ============================================================
+# New tests: JACK_PROACTIVE_ENGINE flag behavior (proactive-reasoning-loop branch)
+# ============================================================
+
+class TestEngineModeFlagInRunCycle:
+    """run_cycle() guards: legacy mode calls gather_all_items; reasoner mode returns 0."""
+
+    def test_legacy_mode_uses_gather_all_items(self, tmp_path, monkeypatch):
+        """JACK_PROACTIVE_ENGINE=legacy → run_cycle proceeds; gather_all_items is called."""
+        monkeypatch.setenv("JACK_PROACTIVE_ENGINE", "legacy")
+        monkeypatch.setenv("JACK_PROACTIVE_ENABLED", "1")
+
+        log_path = tmp_path / "proactive_log.json"
+        engine = ProactiveEngine(log_path=log_path)
+
+        gather_calls = []
+
+        def spy_gather(user_id, *, now=None, history=None):
+            gather_calls.append(user_id)
+            return []
+
+        engine.gather_all_items = spy_gather
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        engine.run_cycle("arnav", now=now)
+
+        assert len(gather_calls) >= 1, "gather_all_items should be called in legacy mode"
+
+    def test_reasoner_mode_run_cycle_returns_zero(self, tmp_path, monkeypatch):
+        """JACK_PROACTIVE_ENGINE=reasoner (default) → run_cycle returns 0 without calling check_*."""
+        monkeypatch.setenv("JACK_PROACTIVE_ENGINE", "reasoner")
+
+        log_path = tmp_path / "proactive_log.json"
+        engine = ProactiveEngine(log_path=log_path)
+
+        check_calls = []
+
+        engine.check_deadlines = lambda *a, **kw: (check_calls.append("deadlines") or [])
+        engine.check_gym = lambda *a, **kw: (check_calls.append("gym") or [])
+        engine.check_goals = lambda *a, **kw: (check_calls.append("goals") or [])
+        engine.gather_all_items = lambda *a, **kw: (check_calls.append("gather") or [])
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        result = engine.run_cycle("arnav", now=now)
+
+        assert result == 0
+        assert check_calls == [], f"check_* should not be called in reasoner mode, but got: {check_calls}"
+
+    def test_legacy_mode_default_is_now_reasoner(self, tmp_path, monkeypatch):
+        """Default (no env var set) → run_cycle returns 0 (reasoner mode by default)."""
+        monkeypatch.delenv("JACK_PROACTIVE_ENGINE", raising=False)
+
+        log_path = tmp_path / "proactive_log.json"
+        engine = ProactiveEngine(log_path=log_path)
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        result = engine.run_cycle("arnav", now=now)
+
+        assert result == 0
+
+
+class TestDecideViaReasoner:
+    """decide_via_reasoner() applies quiet hours, enabled flag, scorer, dedup."""
+
+    def _make_engine(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("JACK_PROACTIVE_ENABLED", "1")
+        monkeypatch.delenv("JACK_PROACTIVE_ENGINE", raising=False)
+        log_path = tmp_path / "proactive_log.json"
+        return ProactiveEngine(log_path=log_path)
+
+    def _make_reasoner_stub(self, items):
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.reason.return_value = items
+        r.last_raw_response = "[]"
+        return r
+
+    def _p1_item(self):
+        return ProactiveItem(
+            nudge_type="test_deadline", priority=P1, score=SCORE_P1,
+            message="Demo tomorrow", alone=True, meta={"source": "reasoner", "reasoning": ""}
+        )
+
+    def test_fallback_on_reasoner_returning_empty(self, tmp_path, monkeypatch):
+        """reasoner.reason() returns [] → decide_via_reasoner returns []."""
+        engine = self._make_engine(tmp_path, monkeypatch)
+        reasoner = self._make_reasoner_stub([])
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        result = engine.decide_via_reasoner("arnav", reasoner, now=now)
+
+        assert result == []
+
+    def test_fallback_on_reasoner_raising(self, tmp_path, monkeypatch):
+        """reasoner.reason() raises → decide_via_reasoner catches it and returns []."""
+        engine = self._make_engine(tmp_path, monkeypatch)
+
+        from unittest.mock import MagicMock
+        reasoner = MagicMock()
+        reasoner.reason.side_effect = RuntimeError("reasoner exploded")
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        # Should NOT raise
+        result = engine.decide_via_reasoner("arnav", reasoner, now=now)
+        assert result == []
+
+    def test_decide_via_reasoner_returns_items_after_scorer(self, tmp_path, monkeypatch):
+        """Returns items from scorer when reasoner provides valid candidates."""
+        engine = self._make_engine(tmp_path, monkeypatch)
+        p1 = self._p1_item()
+        reasoner = self._make_reasoner_stub([p1])
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+        result = engine.decide_via_reasoner("arnav", reasoner, now=now)
+
+        assert len(result) == 1
+        assert result[0].nudge_type == "test_deadline"
+        assert result[0].priority == "P1"
+
+    def test_decide_via_reasoner_quiet_hours(self, tmp_path, monkeypatch):
+        """Returns [] during quiet hours regardless of reasoner output."""
+        engine = self._make_engine(tmp_path, monkeypatch)
+        p1 = self._p1_item()
+        reasoner = self._make_reasoner_stub([p1])
+
+        import datetime as _dt
+        # 03:00 IST = 21:30 UTC
+        now_quiet = _dt.datetime(2026, 6, 21, 21, 30, tzinfo=_dt.timezone.utc)
+        result = engine.decide_via_reasoner("arnav", reasoner, now=now_quiet)
+
+        assert result == []
+
+    def test_decide_via_reasoner_dedup(self, tmp_path, monkeypatch):
+        """Items already sent recently are excluded from results."""
+        engine = self._make_engine(tmp_path, monkeypatch)
+        p1 = self._p1_item()
+        reasoner = self._make_reasoner_stub([p1])
+
+        import datetime as _dt
+        now = _dt.datetime(2026, 6, 22, 7, 45, tzinfo=_dt.timezone.utc)
+
+        # Log the item as already sent (within dedup window)
+        engine.log_sent(p1, now=now - _dt.timedelta(hours=1))
+
+        result = engine.decide_via_reasoner("arnav", reasoner, now=now)
+        assert result == [], "Already-sent item should be deduped out"

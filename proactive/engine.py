@@ -734,6 +734,64 @@ class ProactiveEngine:
         scorer = self._get_scorer()
         return scorer.select(filtered, sent_today=self.sent_today_count(now=now))
 
+    def decide_via_reasoner(
+        self,
+        user_id: str,
+        reasoner: Any,
+        *,
+        now: datetime | None = None,
+    ) -> list[ProactiveItem]:
+        """Return items from the reasoner, filtered by quiet hours, enabled flag, scorer, and dedup.
+
+        Never raises — wraps everything in try/except and returns [] on any failure.
+        The reasoner path: scheduler calls this, then sends/logs (this method never sends).
+        """
+        try:
+            if now is None:
+                now = datetime.now(timezone.utc)
+
+            self._reload_proactive_flag()
+
+            if self.in_quiet_hours(now):
+                return []
+
+            if not _truthy(os.environ.get("JACK_PROACTIVE_ENABLED", "1")):
+                return []
+
+            # Get today's sent descriptions for context (best-effort)
+            already_sent_today: list[str] = []
+            try:
+                log = self._read_log()
+                today_ist = now.astimezone(_IST).date()
+                for entry in log:
+                    try:
+                        sent_at = _from_z(entry["sent_at"]).astimezone(_IST)
+                        if sent_at.date() == today_ist:
+                            already_sent_today.append(
+                                f"[{entry.get('priority', '')}] {entry.get('nudge_type', '')}"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
+            # reason() never raises
+            candidates = reasoner.reason(user_id, now, already_sent_today)
+
+            # Apply scorer
+            scorer = self._get_scorer()
+            selected = scorer.select(candidates, sent_today=self.sent_today_count(now=now))
+
+            # Apply dedup
+            filtered = [
+                it for it in selected
+                if not self.already_sent_recently(it.nudge_type, now=now)
+            ]
+            return filtered
+
+        except Exception:  # noqa: BLE001
+            return []
+
     def run_cycle(
         self,
         user_id: str,
@@ -745,6 +803,11 @@ class ProactiveEngine:
 
         If send_fn returns False the item is NOT logged so it stays retryable.
         """
+        # Reasoner mode: the scheduler owns the cycle; run_cycle is legacy-only.
+        engine_mode = os.environ.get("JACK_PROACTIVE_ENGINE", "reasoner")
+        if engine_mode != "legacy":
+            return 0
+
         if now is None:
             now = datetime.now(timezone.utc)
 
