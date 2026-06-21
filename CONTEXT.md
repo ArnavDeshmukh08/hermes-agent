@@ -10,7 +10,28 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-21. (**Jack self-management shipped + DEPLOYED:** Jack can now
+> Last meaningful update: 2026-06-22. (**Proactive reasoning loop built — branch `proactive-reasoning-loop`:**
+> Replaced hardcoded `check_gym()`, `check_siddhi()`, `check_goals()` in `ProactiveEngine` with
+> an LLM reasoning loop (`ProactiveReasoner`). Jack now reads mem0 memory + calendar + reminders
+> + time context, calls `qwen2.5:14b` via Mac Ollama, and returns structured nudge candidates.
+> Rollback: `JACK_PROACTIVE_ENGINE=legacy` (no code change needed). Shadow mode:
+> `JACK_PROACTIVE_MODE=shadow` — full pipeline runs but only logs to `proactive_shadow.log`, never
+> sends Discord messages. New files: `proactive/reasoner.py` (301 lines), `proactive/shadow.py`.
+> 617/617 tests green. 5 commits. Awaiting review + merge to main + VPS deploy.
+> Bug fixed: `qwen2.5:14b` with `format:json` returned `{}` instead of array; fixed by requesting
+> `{"nudges": [...]}` wrapper in prompt. Prior update: **Semantic memory layer shipped + DEPLOYED:** Jack now
+> uses Mem0/Qdrant for persistent semantic memory instead of flat-file USER.md reads. Architecture:
+> `jack_memory/` package — `client.py` (thin `Memory.from_config` wrapper, 1.5s search timeout,
+> ThreadPoolExecutor, never calls extraction LLM on the hot path), `queue.py` (fcntl-flock durable
+> backlog for Mac-offline), `mem0_adapter.py` (drop-in MemoryUpdater), `backend.py`
+> (JACK_MEMORY_BACKEND=flatfile|mem0 flag, instant rollback), `migrate.py` (idempotent one-shot
+> migration, USER.md read-only, .premigration.bak preserved). Infrastructure: Qdrant v1.13.6
+> systemd user service on VPS (127.0.0.1:6333 only); nomic-embed-text 768-dim on VPS Ollama
+> (embeddings never leave the box); qwen2.5:14b on Mac via Tailscale for extraction (JACK_EXTRACT_URL).
+> Migration: 66 USER.md facts committed (37 dupes/garbles stripped), 55 Qdrant points after LLM dedup.
+> Voice fix: _MEMORY_SUMMARY_GUIDANCE now enforces second-person voice — Jack never says "Arnav"
+> or "his memory" when summarising what he knows. 575 tests green (+185), commit f5771d9.
+> Prior same-day: **Jack self-management shipped + DEPLOYED:** Jack can now
 > configure his OWN settings from Discord — a `self_config` intent (set/list/status) backed by
 > `jack_tools/self_config.py`, which atomically edits `~/.hermes/.env`, logs to
 > `~/.hermes/logs/self_config.log`, restarts the owning systemd `--user` service, and **only

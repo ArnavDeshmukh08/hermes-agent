@@ -19,6 +19,48 @@
   (outreach/scraper persona "Hamza"), `browser_agent.py`, `contextual_writer_agent.py`,
   `generate_and_send_image.py`. Stealth browser stack present (camoufox / agent-browser).
 
+## 2026-06-22 — Overnight: Proactive reasoning loop built (branch `proactive-reasoning-loop`)
+
+**What was built (SHADOW MODE — zero prod touched):**
+- `proactive/reasoner.py` (301 lines): `ProactiveReasoner` — reads mem0 + calendar + reminders + time, calls qwen2.5:14b via Mac Ollama, returns `list[ProactiveItem]`. Full try/except, never raises, never calls notifier.
+- `proactive/shadow.py`: `log_shadow_cycle()` — atomic flock append to `~/.hermes/logs/proactive_shadow.log`. Records what WOULD have sent with full reasoning.
+- `proactive/scheduler.py` modified: `run_once()` routes to `_run_once_legacy` or `_run_once_reasoner` based on `JACK_PROACTIVE_ENGINE` env var.
+- `proactive/engine.py` modified: `run_cycle()` returns 0 unless `JACK_PROACTIVE_ENGINE=legacy`. New `decide_via_reasoner()` helper.
+- 26 new tests (12 reasoner + 6 shadow + 8 engine). 617/617 total green.
+- 5 commits on branch: `cfda4bf`, `151d07e`, `17fd441`, `c0568e3`, `575de30`
+- Bug fixed during shadow: qwen2.5:14b with `format:json` returns `{}` not array — fixed by requesting `{"nudges":[...]}` wrapper in prompt.
+
+**Shadow run results (23 cycles, 00:58–01:21 IST):**
+- Mac reachable: 23/23. LLM returned nothing to surface (quiet hours + no local Qdrant context). Correct behaviour.
+- Zero Discord messages sent. Zero prod files modified.
+
+**Gates pending Arnav review:**
+- GATE A: Merge `proactive-reasoning-loop` → `main`
+- GATE B: Deploy to VPS in shadow mode (flip JACK_PROACTIVE_ENGINE=reasoner + JACK_PROACTIVE_MODE=shadow)
+- GATE C: Go live (JACK_PROACTIVE_MODE=live) — only after reviewing VPS shadow decisions for 5–7 days
+
+**Rollback:** `JACK_PROACTIVE_ENGINE=legacy` — no code change, instant.
+
+## 2026-06-21 — Session: Semantic memory layer (Mem0/Qdrant) shipped
+
+**What was built:**
+- `jack_memory/` package: `client.py`, `queue.py`, `mem0_adapter.py`, `backend.py`, `migrate.py`
+- `JACK_MEMORY_BACKEND` env flag (`flatfile` default → instant rollback to old path; `mem0` for new)
+- Qdrant v1.13.6 systemd user service on VPS (`127.0.0.1:6333` only, no external exposure)
+- nomic-embed-text 768-dim embeddings on VPS Ollama (never routed to Mac)
+- qwen2.5:14b on Mac via Tailscale for extraction (JACK_EXTRACT_URL=`http://100.120.65.115:11434`)
+- Graceful-degradation queue (`~/.hermes/memory_queue.json`, flock-protected) for Mac-offline
+- Migration: 103 raw USER.md facts → 66 after dedup (37 stripped) → 55 Qdrant points after LLM dedup
+- Voice bug fix: `_MEMORY_SUMMARY_GUIDANCE` now enforces second-person ("you/your"), forbids "Arnav"/"his memory"
+- 575 tests green (+185 new), commit `f5771d9` on VPS `main`
+
+**Key bugs found and fixed during deploy:**
+- `Memory(config=cfg)` is wrong for mem0ai v2.0.7 — must use `Memory.from_config(cfg)` (fixed in client.py)
+- qdrant-client v1.18.0 vs server v1.13.6: compatibility warning only, operations work correctly
+- Test leakage: one `test_memory_rewire.py` rsync'd to wrong dir (`hooks/jack_router/`) — removed before commit
+
+**Rollback:** set `JACK_MEMORY_BACKEND=flatfile` in `/home/hermes/.hermes/.env`, restart gateway. USER.md preserved as `.premigration.bak`.
+
 ## 2026-06-14 — Session 1: diagnosed & fixed the dead brain
 **Symptom reported:** "fails a lot", "Telegram group chat isn't working."
 
