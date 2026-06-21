@@ -76,22 +76,185 @@ class ProactiveScheduler:
     # -- core cycle -------------------------------------------------------
 
     def run_once(self, now: datetime | None = None) -> int:
-        """Run one proactive cycle. Returns number of messages sent.
+        """Run one proactive cycle. Returns number of messages sent (or would-send in shadow).
 
         Respects JACK_PROACTIVE_ENABLED (default on). Swallows all exceptions
         from the engine so the poll loop never crashes on a bad cycle.
+
+        Dispatches to legacy engine (JACK_PROACTIVE_ENGINE=legacy) or the new
+        ProactiveReasoner path (default). In shadow mode (JACK_PROACTIVE_MODE=shadow,
+        the default) no Discord messages are ever sent.
         """
+        if now is None:
+            now = datetime.now(timezone.utc)
         enabled = _truthy(os.environ.get("JACK_PROACTIVE_ENABLED", "1"))
         if not enabled:
             self._logger("proactive disabled — skipping cycle")
             return 0
+
+        engine_mode = os.environ.get("JACK_PROACTIVE_ENGINE", "reasoner")
+        if engine_mode == "legacy":
+            return self._run_once_legacy(now)
+        return self._run_once_reasoner(now)
+
+    def _run_once_legacy(self, now: datetime) -> int:
+        """Legacy path: delegate to ProactiveEngine.run_cycle."""
+        sent = 0
         try:
             sent = self._engine.run_cycle(self._user_id, now=now)
-            self._logger(f"proactive cycle sent={sent}")
-            return sent
+            self._logger(f"proactive cycle (legacy) sent={sent}")
         except Exception as exc:  # noqa: BLE001 — never crash the poll loop
-            self._logger(f"proactive cycle error: {type(exc).__name__}: {exc}")
+            self._logger(f"proactive cycle (legacy) error: {type(exc).__name__}: {exc}")
+
+        _drain_memory_queue_if_needed()
+        return sent
+
+    def _run_once_reasoner(self, now: datetime) -> int:  # noqa: C901 — complex but sequential
+        """New reasoner path: run ProactiveReasoner, score, dedup, shadow-log or send."""
+        mode = os.environ.get("JACK_PROACTIVE_MODE", "shadow")
+
+        # Build deps — each individually guarded so partial failure still works.
+        try:
+            from jack_memory.client import JackMemoryClient  # noqa: PLC0415
+            memory_client = JackMemoryClient.from_env()
+        except Exception as exc:
+            self._logger(f"memory_client init failed: {type(exc).__name__}: {exc}")
+            memory_client = None
+
+        try:
+            from reminders.store import ReminderStore  # noqa: PLC0415
+            store = ReminderStore()
+        except Exception as exc:
+            self._logger(f"store init failed: {type(exc).__name__}: {exc}")
+            store = None
+
+        try:
+            from integrations.calendar import CalendarClient  # noqa: PLC0415
+            calendar_client = CalendarClient()
+        except Exception as exc:
+            self._logger(f"calendar_client init failed: {type(exc).__name__}: {exc}")
+            calendar_client = None
+
+        try:
+            from jack_memory.queue import MemoryQueue  # noqa: PLC0415
+            queue = MemoryQueue()
+        except Exception as exc:
+            self._logger(f"queue init failed: {type(exc).__name__}: {exc}")
+            queue = None
+
+        # Build reasoner (lazy import — Agent 1 owns this file).
+        try:
+            from proactive.reasoner import ProactiveReasoner  # noqa: PLC0415
+            reasoner = ProactiveReasoner(
+                memory_client=memory_client,
+                store=store,
+                calendar_client=calendar_client,
+                queue=queue,
+                user_id=self._user_id,
+            )
+        except Exception as exc:
+            self._logger(f"reasoner init failed: {type(exc).__name__}: {exc}")
             return 0
+
+        # Resolve engine (for dedup, scoring, quiet hours).
+        if self._engine is None:
+            try:
+                from proactive.engine import ProactiveEngine  # noqa: PLC0415
+                self._engine = ProactiveEngine()
+            except Exception as exc:
+                self._logger(f"engine init failed: {type(exc).__name__}: {exc}")
+                return 0
+
+        # Collect already-sent nudge descriptions for today (best-effort).
+        already_sent_today: list[str] = []
+        try:
+            log = self._engine._read_log()
+            now_ist_date = now.astimezone(_IST).date()
+            for entry in log:
+                try:
+                    from proactive.engine import _from_z  # noqa: PLC0415
+                    sent_at = _from_z(entry["sent_at"]).astimezone(_IST)
+                    if sent_at.date() == now_ist_date:
+                        already_sent_today.append(
+                            f"[{entry.get('priority', '')}] {entry.get('nudge_type', '')}"
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Run reasoning — never raises; returns [] on any failure.
+        candidates = reasoner.reason(self._user_id, now, already_sent_today)
+        raw: str | None = getattr(reasoner, "last_raw_response", None)
+        mac_reachable = raw is not None
+
+        # Score candidates.
+        from proactive.scorer import PriorityScorer  # noqa: PLC0415
+        scorer = PriorityScorer()
+        sent_today = 0
+        try:
+            sent_today = self._engine.sent_today_count(now=now)
+        except Exception:  # noqa: BLE001
+            pass
+        selected = scorer.select(candidates, sent_today=sent_today)
+
+        # Dedup: drop nudges sent recently.
+        dedup_dropped: list[str] = []
+        kept: list = []
+        for it in selected:
+            try:
+                if self._engine.already_sent_recently(it.nudge_type, now=now):
+                    dedup_dropped.append(it.nudge_type)
+                else:
+                    kept.append(it)
+            except Exception:  # noqa: BLE001
+                kept.append(it)
+
+        # Quiet hours check.
+        quiet = False
+        try:
+            from proactive.engine import ProactiveEngine  # noqa: PLC0415
+            quiet = ProactiveEngine.in_quiet_hours(now)
+        except Exception:  # noqa: BLE001
+            pass
+        kept_final = [] if quiet else kept
+
+        now_ist = now.astimezone(_IST)
+
+        if mode == "shadow":
+            try:
+                from proactive.shadow import log_shadow_cycle  # noqa: PLC0415
+                log_shadow_cycle(
+                    now_ist,
+                    kept_final,
+                    raw,
+                    mac_reachable=mac_reachable,
+                    dedup_dropped=dedup_dropped,
+                    quiet_hours=quiet,
+                )
+            except Exception as exc:
+                self._logger(f"shadow log failed: {type(exc).__name__}: {exc}")
+            self._logger(f"proactive cycle (reasoner/shadow) would_send={len(kept_final)}")
+            _drain_memory_queue_if_needed()
+            return len(kept_final)
+
+        else:  # live
+            if quiet:
+                self._logger("proactive cycle (reasoner/live) quiet hours — skip")
+                return 0
+            count = 0
+            for it in kept_final:
+                try:
+                    rendered = PriorityScorer.render(it)
+                    ok = self._engine._send(rendered, self._user_id)
+                    if ok:
+                        self._engine.log_sent(it, now=now)
+                        count += 1
+                except Exception as exc:
+                    self._logger(f"send failed: {type(exc).__name__}: {exc}")
+            self._logger(f"proactive cycle (reasoner/live) sent={count}")
+            _drain_memory_queue_if_needed()
+            return count
 
     # -- run loop ---------------------------------------------------------
 
@@ -145,6 +308,36 @@ class ProactiveScheduler:
 
 
 # -- helpers --------------------------------------------------------------
+
+
+def _drain_memory_queue_if_needed() -> None:
+    """Drain the memory extraction queue if backend=mem0 and Mac is reachable.
+
+    Called once per proactive poll cycle. Never raises — any failure is silent.
+    On flatfile backend this is a fast early-return with no imports.
+    """
+    try:
+        from jack_memory.backend import memory_backend
+        if memory_backend() != "mem0":
+            return
+        from jack_memory.client import JackMemoryClient
+        from jack_memory.queue import MemoryQueue
+        client = JackMemoryClient.from_env()
+        h = client.health()
+        if not h.get("extractor"):
+            return  # Mac still down; leave items queued
+        queue = MemoryQueue()
+        if len(queue) == 0:
+            return
+        drained = queue.drain(lambda item: client.add(
+            item.get("messages", []),
+            user_id=item.get("user_id", "arnav"),
+            metadata=item.get("metadata"),
+        ))
+        if drained:
+            print(f"[memory_queue] drained {drained} item(s)", flush=True)
+    except Exception:  # noqa: BLE001 — must never crash the poll loop
+        pass
 
 
 def _load_env(env_path: Path) -> None:
