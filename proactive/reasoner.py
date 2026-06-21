@@ -168,7 +168,9 @@ class ProactiveReasoner:
 {qdepth} memories still pending write (context may be incomplete if >0).
 
 ---
-Given all of this, what (if anything) should I proactively surface to Arnav right now? Return a JSON array of items. Each item: {{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}}. If nothing is worth surfacing, return []. Be conservative."""
+Given all of this, what (if anything) should I proactively surface to Arnav right now?
+
+Return a JSON object: {{"nudges": [...]}} where each nudge has: {{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}}. If nothing is worth surfacing, return {{"nudges": []}}. Be conservative — silence is fine."""
 
         return (_SYSTEM_PROMPT, user_prompt)
 
