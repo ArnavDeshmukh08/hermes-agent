@@ -71,10 +71,11 @@ class TestPromptStructure:
         assert "2 HOURS" in ctx or "2 hours" in ctx
         assert "MUST NOT" in ctx
 
-    def test_event_outside_2h_labelled_do_not_surface(self):
+    def test_event_outside_2h_completely_hidden(self):
         ctx = _make_context(events=[_event("Gym session", hour_offset=5.0)])
-        assert "do NOT surface" in ctx
-        assert "Gym session" in ctx
+        # Events >2h away are omitted entirely — model cannot surface what it cannot see
+        assert "Gym session" not in ctx
+        assert "No calendar events within the next 2 hours" in ctx
 
     def test_event_within_2h_labelled_actionable(self):
         ctx = _make_context(events=[_event("Doctor appointment", hour_offset=1.5)])

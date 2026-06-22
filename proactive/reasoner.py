@@ -32,14 +32,20 @@ _VALID_PRIORITIES = (P1, P2, P3)
 _logger = logging.getLogger("proactive.reasoner")
 # Kept outside the f-string in gather_context() to avoid double-brace escaping
 # errors and make the schema independently readable.
-# nudge_type is restricted to a fixed canonical set so dedup always matches.
+# nudge_type is mapped by domain so the LLM understands the intent, not just
+# an opaque enum — this helps small models pick the right value consistently.
 _RESPONSE_SCHEMA_HINT = (
-    'Return ONLY a JSON object: {"nudges": [...]} where each nudge is '
-    '{"priority": "P1"|"P2"|"P3", "message": str, '
-    '"nudge_type": "gym"|"relationship_followup"|"goal_nudge"|"calendar_prep"|"health_nudge", '
-    '"alone": bool, "reasoning": str}. '
-    'nudge_type MUST be exactly one of those five values — no other strings allowed. '
-    'The "reasoning" must name which domain (1-5) triggered the nudge and why it is timely. '
+    'Return ONLY a JSON object: {"nudges": [...]} where each nudge has these fields:\n'
+    '  "priority": "P1" or "P2" or "P3"\n'
+    '  "message": the text to send (concise, actionable)\n'
+    '  "nudge_type": pick the right value for the domain that triggered this:\n'
+    '    - fitness/exercise/gym → "gym"\n'
+    '    - checking in with a person, relationship → "relationship_followup"\n'
+    '    - work project, goal, deadline, study → "goal_nudge"\n'
+    '    - imminent calendar event (within 2h) → "calendar_prep"\n'
+    '    - sleep, hydration, health habit → "health_nudge"\n'
+    '  "alone": true if P1 or urgent, false otherwise\n'
+    '  "reasoning": which domain (1-5) triggered this and exactly why it is timely NOW\n'
     'If nothing qualifies, return {"nudges": []}.'
 )
 
@@ -91,21 +97,19 @@ def gather_context(
         _logger.warning("gather_context: memory collection failed: %s: %s", type(exc).__name__, exc)
         memories = []
 
-    # --- calendar (pre-filtered to 2-hour window) ---
-    # Events more than 2h away are labelled "do NOT surface" so the LLM
-    # never needs to do time arithmetic — it just sees the explicit label.
+    # --- calendar (hard-filtered to 2-hour window) ---
+    # Only events starting within 2 hours are shown. Events further away are
+    # completely omitted — the model cannot surface what it cannot see.
     calendar_text: str = ""
     try:
         if calendar_client is not None:
             events = calendar_client.list_events(day=now) or []
             within_2h_lines: list[str] = []
-            later_lines: list[str] = []
             for ev in events:
                 start_info = ev.get("start", {})
                 start_str = start_info.get("dateTime") or start_info.get("date") or ""
                 title = ev.get("summary", "(no title)")
                 if not start_str:
-                    later_lines.append(title)
                     continue
                 try:
                     if "T" in start_str:
@@ -113,23 +117,14 @@ def gather_context(
                         if start_dt.tzinfo is None:
                             start_dt = start_dt.replace(tzinfo=timezone.utc)
                         hours_until = (start_dt - now).total_seconds() / 3600
-                        time_str = start_str.split("T")[1][:5]
                         if 0 <= hours_until <= 2:
+                            time_str = start_str.split("T")[1][:5]
                             within_2h_lines.append(
-                                f"{time_str} {title} ({hours_until:.1f}h away — actionable)"
+                                f"{time_str} {title} (in {hours_until:.1f}h — prep if needed)"
                             )
-                        else:
-                            later_lines.append(f"{time_str} {title}")
-                    else:
-                        later_lines.append(title)
                 except Exception:
-                    later_lines.append(title)
-            if within_2h_lines:
-                calendar_text = "WITHIN 2 HOURS — consider surfacing:\n" + "\n".join(within_2h_lines)
-                if later_lines:
-                    calendar_text += "\n\nLater today — do NOT surface:\n" + "\n".join(later_lines)
-            elif later_lines:
-                calendar_text = "No events within 2 hours.\nLater today — do NOT surface:\n" + "\n".join(later_lines)
+                    pass
+            calendar_text = "\n".join(within_2h_lines) if within_2h_lines else ""
     except Exception as exc:
         _logger.warning("gather_context: calendar fetch failed: %s: %s", type(exc).__name__, exc)
         calendar_text = ""
@@ -160,7 +155,7 @@ def gather_context(
 
     # --- format the context string ---
     mem_lines = "\n".join(f"- {m}" for m in memories) if memories else "No memories available."
-    cal = calendar_text or "No calendar events."
+    cal = calendar_text or "No calendar events within the next 2 hours."
     rem = reminders_text or "No pending reminders."
     already = already_sent if already_sent is not None else []
     already_lines = "\n".join(f"- {s}" for s in already) if already else "Nothing surfaced yet today."
