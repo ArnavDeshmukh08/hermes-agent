@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.garmin</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>python3</string>
+    <string>/Users/arnav/Documents/Hermes Agent/mac_services/garmin_service.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/arnav/Documents/Hermes Agent</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/garmin-service.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/garmin-service-error.log</string>
+</dict>
+</plist>
