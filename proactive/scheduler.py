@@ -142,20 +142,6 @@ class ProactiveScheduler:
             self._logger(f"queue init failed: {type(exc).__name__}: {exc}")
             queue = None
 
-        # Build reasoner (lazy import — Agent 1 owns this file).
-        try:
-            from proactive.reasoner import ProactiveReasoner  # noqa: PLC0415
-            reasoner = ProactiveReasoner(
-                memory_client=memory_client,
-                store=store,
-                calendar_client=calendar_client,
-                queue=queue,
-                user_id=self._user_id,
-            )
-        except Exception as exc:
-            self._logger(f"reasoner init failed: {type(exc).__name__}: {exc}")
-            return 0
-
         # Resolve engine (for dedup, scoring, quiet hours).
         if self._engine is None:
             try:
@@ -183,8 +169,21 @@ class ProactiveScheduler:
         except Exception:  # noqa: BLE001
             pass
 
+        # Gather context on the VPS (has Qdrant/reminders/calendar), then reason on Mac.
+        from proactive.reasoner import ProactiveReasoner, gather_context  # noqa: PLC0415
+        context_str = ""
+        try:
+            context_str = gather_context(
+                memory_client, store, calendar_client, queue,
+                self._user_id, now,
+                already_sent=already_sent_today,
+            )
+        except Exception as exc:
+            self._logger(f"gather_context failed: {type(exc).__name__}: {exc}")
+
+        reasoner = ProactiveReasoner()  # no data deps
         # Run reasoning — never raises; returns [] on any failure.
-        candidates = reasoner.reason(self._user_id, now, already_sent_today)
+        candidates = reasoner.reason(context_str)
         raw: str | None = getattr(reasoner, "last_raw_response", None)
         mac_reachable = raw is not None
 

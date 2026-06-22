@@ -1,12 +1,14 @@
-"""ProactiveReasoner — LLM-driven reasoning over memory, calendar, reminders, and time.
+"""ProactiveReasoner — LLM-driven reasoning over a pre-built context string.
 
-Replaces hardcoded check_* rules in ProactiveEngine with a single reasoning call to the
-Mac Ollama (qwen2.5:14b via JACK_EXTRACT_URL). Falls back to [] on any failure — never
-raises, never blocks more than MAC_OLLAMA_TIMEOUT_S seconds.
+Architecture split:
+  - gather_context()    : module-level function, runs on the VPS (has Qdrant/reminders/calendar).
+                          Returns a formatted string ready to embed in the reasoning prompt.
+  - ProactiveReasoner   : pure reasoning class, runs on any machine (Mac or VPS).
+                          Takes a pre-built context string, calls Mac Ollama, returns ProactiveItems.
+                          Has ZERO data dependencies — never touches Qdrant, reminders, or calendar.
 
-All dependencies (memory_client, store, calendar_client, queue) are INJECTED via
-constructor. This module has zero real network calls at import time and is testable
-with mocks only.
+The scheduler calls gather_context() locally (VPS has Qdrant), then passes the resulting
+string to ProactiveReasoner.reason(context_str) which calls the Mac LLM.
 """
 
 from __future__ import annotations
@@ -37,120 +39,85 @@ _SYSTEM_PROMPT = (
 )
 
 
-class ProactiveReasoner:
-    """LLM-driven proactive reasoning over memory, calendar, reminders, and time."""
+def gather_context(
+    memory_client: Any,
+    store: Any,
+    calendar_client: Any,
+    queue: Any,
+    user_id: str,
+    now: datetime,
+    *,
+    already_sent: list[str] | None = None,
+) -> str:
+    """Collect memory/calendar/reminders/time into a formatted string.
 
-    def __init__(
-        self,
-        *,
-        memory_client: Any,
-        store: Any,
-        calendar_client: Any,
-        queue: Any = None,
-        user_id: str = "",
-    ) -> None:
-        self._memory_client = memory_client
-        self._store = store
-        self._calendar_client = calendar_client
-        self._queue = queue
-        self._user_id = user_id
-        self.last_raw_response: Optional[str] = None
+    Run this on the VPS where Qdrant and reminders are local.
+    Returns a string ready to embed in the reasoning prompt.
+    """
+    # --- memories ---
+    memories: list[str] = []
+    try:
+        seen: set[str] = set()
+        for query in _MEMORY_SEARCH_QUERIES:
+            try:
+                results = memory_client.search(query, user_id=user_id, limit=_MEMORY_SEARCH_LIMIT)
+                for r in results:
+                    text = r.get("memory") if isinstance(r, dict) else None
+                    if text and text not in seen:
+                        seen.add(text)
+                        memories.append(text)
+                        if len(memories) >= _MAX_MEMORIES:
+                            break
+            except Exception:
+                pass
+            if len(memories) >= _MAX_MEMORIES:
+                break
+    except Exception as exc:
+        _logger.warning("gather_context: memory collection failed: %s: %s", type(exc).__name__, exc)
+        memories = []
 
-    def gather_context(
-        self,
-        user_id: str,
-        now: datetime,
-        *,
-        already_sent: Optional[list[str]] = None,
-    ) -> dict:
-        """Collect all context needed for the reasoning prompt.
+    # --- calendar ---
+    calendar_text: str = ""
+    try:
+        if calendar_client is not None:
+            calendar_text = calendar_client.events_summary_text() or ""
+    except Exception as exc:
+        _logger.warning("gather_context: calendar fetch failed: %s: %s", type(exc).__name__, exc)
+        calendar_text = ""
 
-        Returns a dict with keys: memories, calendar, reminders, time_context,
-        already_sent, queue_depth.
-        """
-        # --- memories ---
-        memories: list[str] = []
-        try:
-            seen: set[str] = set()
-            for query in _MEMORY_SEARCH_QUERIES:
-                try:
-                    results = self._memory_client.search(query, user_id=user_id, limit=_MEMORY_SEARCH_LIMIT)
-                    for r in results:
-                        text = r.get("memory") if isinstance(r, dict) else None
-                        if text and text not in seen:
-                            seen.add(text)
-                            memories.append(text)
-                            if len(memories) >= _MAX_MEMORIES:
-                                break
-                except Exception:
-                    pass
-                if len(memories) >= _MAX_MEMORIES:
-                    break
-        except Exception as exc:
-            _logger.warning("gather_context: memory collection failed: %s: %s", type(exc).__name__, exc)
-            memories = []
+    # --- reminders ---
+    reminders_text: str = ""
+    try:
+        if store is not None:
+            pending = store.list_pending(user_id)
+            if pending:
+                lines = [f"- {r['message']} (fires {r['fire_at']})" for r in pending]
+                reminders_text = "\n".join(lines)
+    except Exception as exc:
+        _logger.warning("gather_context: reminders fetch failed: %s: %s", type(exc).__name__, exc)
+        reminders_text = ""
 
-        # --- calendar ---
-        calendar_text: str = ""
-        try:
-            if self._calendar_client is not None:
-                calendar_text = self._calendar_client.events_summary_text() or ""
-        except Exception as exc:
-            _logger.warning("gather_context: calendar fetch failed: %s: %s", type(exc).__name__, exc)
-            calendar_text = ""
+    # --- time context ---
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now_ist = now.astimezone(_IST)
 
-        # --- reminders ---
-        reminders_text: str = ""
-        try:
-            if self._store is not None:
-                pending = self._store.list_pending(user_id)
-                if pending:
-                    lines = [f"- {r['message']} (fires {r['fire_at']})" for r in pending]
-                    reminders_text = "\n".join(lines)
-        except Exception as exc:
-            _logger.warning("gather_context: reminders fetch failed: %s: %s", type(exc).__name__, exc)
-            reminders_text = ""
+    # --- queue depth ---
+    queue_depth: int = 0
+    try:
+        queue_depth = len(queue) if queue is not None else 0
+    except Exception:
+        queue_depth = 0
 
-        # --- time context ---
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        now_ist = now.astimezone(_IST)
-        time_context = {
-            "iso": now_ist.isoformat(),
-            "day_of_week": now_ist.strftime("%A"),
-            "hour": now_ist.hour,
-            "date": now_ist.strftime("%Y-%m-%d"),
-        }
+    # --- format the context string ---
+    mem_lines = "\n".join(f"- {m}" for m in memories) if memories else "No memories available."
+    cal = calendar_text or "No calendar events."
+    rem = reminders_text or "No pending reminders."
+    already = already_sent if already_sent is not None else []
+    already_lines = "\n".join(f"- {s}" for s in already) if already else "Nothing surfaced yet today."
 
-        # --- queue depth ---
-        queue_depth: int = 0
-        try:
-            queue_depth = len(self._queue) if self._queue is not None else 0
-        except Exception:
-            queue_depth = 0
-
-        return {
-            "memories": memories,
-            "calendar": calendar_text,
-            "reminders": reminders_text,
-            "time_context": time_context,
-            "already_sent": already_sent if already_sent is not None else [],
-            "queue_depth": queue_depth,
-        }
-
-    def build_reasoning_prompt(self, context: dict) -> tuple[str, str]:
-        """Build (system_prompt, user_prompt) from gathered context."""
-        tc = context["time_context"]
-        memories = context.get("memories", [])
-        mem_lines = "\n".join(f"- {m}" for m in memories) if memories else "No memories available."
-        cal = context.get("calendar") or "No calendar events."
-        rem = context.get("reminders") or "No pending reminders."
-        already = context.get("already_sent", [])
-        already_lines = "\n".join(f"- {s}" for s in already) if already else "Nothing surfaced yet today."
-        qdepth = context.get("queue_depth", 0)
-
-        user_prompt = f"""# Current time
-{tc['day_of_week']} {tc['date']} {tc['hour']}:00 IST
+    context_str = f"""# Current time
+{now_ist.strftime("%A")} {now_ist.strftime("%Y-%m-%d")} {now_ist.hour}:00 IST
 
 # What I remember about Arnav
 {mem_lines}
@@ -165,14 +132,42 @@ class ProactiveReasoner:
 {already_lines}
 
 # Memory queue
-{qdepth} memories still pending write (context may be incomplete if >0).
+{queue_depth} memories still pending write (context may be incomplete if >0).
 
 ---
 Given all of this, what (if anything) should I proactively surface to Arnav right now?
 
 Return a JSON object: {{"nudges": [...]}} where each nudge has: {{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}}. If nothing is worth surfacing, return {{"nudges": []}}. Be conservative — silence is fine."""
 
-        return (_SYSTEM_PROMPT, user_prompt)
+    return context_str
+
+
+class ProactiveReasoner:
+    """Pure reasoning: pre-built context string → Mac LLM → ProactiveItems.
+
+    Never fetches data. Never touches Qdrant, reminders, or calendar.
+    Call gather_context() on the VPS first, then pass the result here.
+    """
+
+    def __init__(self) -> None:
+        self.last_raw_response: Optional[str] = None
+
+    def reason(self, context_str: str) -> list[ProactiveItem]:
+        """Run one reasoning cycle. Never raises — returns [] on any failure."""
+        try:
+            self.last_raw_response = None
+            system = _SYSTEM_PROMPT
+            raw = self._mac_ollama_complete(system, context_str)
+            self.last_raw_response = raw
+            if raw is None:
+                _logger.info("Mac unreachable — reasoning skipped")
+                return []
+            items_raw = self._parse_items(raw)
+            result = [self._to_proactive_item(it) for it in items_raw]
+            return [it for it in result if it is not None]
+        except Exception:
+            _logger.exception("reason() failed unexpectedly")
+            return []
 
     def _mac_ollama_complete(self, prompt_system: str, prompt_user: str) -> Optional[str]:
         """Call Mac Ollama and return the content string, or None on any failure."""
@@ -260,43 +255,3 @@ Return a JSON object: {{"nudges": [...]}} where each nudge has: {{"priority": "P
             alone=alone,
             meta={"source": "reasoner", "reasoning": reasoning},
         )
-
-    def reason(
-        self,
-        user_id: str,
-        now: datetime,
-        already_sent_today: list[str],
-        store: Any = None,
-        calendar_client: Any = None,
-        memory_client: Any = None,
-        queue: Any = None,
-    ) -> list[ProactiveItem]:
-        """Run one reasoning cycle. Never raises — returns [] on any failure."""
-        try:
-            self.last_raw_response = None
-
-            if memory_client is not None:
-                self._memory_client = memory_client
-            if store is not None:
-                self._store = store
-            if calendar_client is not None:
-                self._calendar_client = calendar_client
-            if queue is not None:
-                self._queue = queue
-
-            ctx = self.gather_context(user_id, now, already_sent=already_sent_today)
-            system, user = self.build_reasoning_prompt(ctx)
-            raw = self._mac_ollama_complete(system, user)
-            self.last_raw_response = raw
-
-            if raw is None:
-                _logger.info("Mac unreachable — reasoning skipped")
-                return []
-
-            items_raw = self._parse_items(raw)
-            result = [self._to_proactive_item(it) for it in items_raw]
-            return [it for it in result if it is not None]
-
-        except Exception:
-            _logger.exception("reason() failed unexpectedly")
-            return []

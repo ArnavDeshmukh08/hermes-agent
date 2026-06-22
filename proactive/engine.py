@@ -775,8 +775,11 @@ class ProactiveEngine:
             except Exception:  # noqa: BLE001
                 pass
 
+            # Build context on VPS side (Qdrant etc), then call Mac LLM via reasoner.
+            from proactive.reasoner import gather_context as _gc  # noqa: PLC0415
+            context_str = _gc(None, None, None, None, user_id, now, already_sent=already_sent_today)
             # reason() never raises
-            candidates = reasoner.reason(user_id, now, already_sent_today)
+            candidates = reasoner.reason(context_str)
 
             # Apply scorer
             scorer = self._get_scorer()
