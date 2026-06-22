@@ -32,9 +32,13 @@ _VALID_PRIORITIES = (P1, P2, P3)
 _logger = logging.getLogger("proactive.reasoner")
 # Kept outside the f-string in gather_context() to avoid double-brace escaping
 # errors and make the schema independently readable.
+# nudge_type is restricted to a fixed canonical set so dedup always matches.
 _RESPONSE_SCHEMA_HINT = (
     'Return ONLY a JSON object: {"nudges": [...]} where each nudge is '
-    '{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}. '
+    '{"priority": "P1"|"P2"|"P3", "message": str, '
+    '"nudge_type": "gym"|"relationship_followup"|"goal_nudge"|"calendar_prep"|"health_nudge", '
+    '"alone": bool, "reasoning": str}. '
+    'nudge_type MUST be exactly one of those five values — no other strings allowed. '
     'The "reasoning" must name which domain (1-5) triggered the nudge and why it is timely. '
     'If nothing qualifies, return {"nudges": []}.'
 )
@@ -87,11 +91,45 @@ def gather_context(
         _logger.warning("gather_context: memory collection failed: %s: %s", type(exc).__name__, exc)
         memories = []
 
-    # --- calendar ---
+    # --- calendar (pre-filtered to 2-hour window) ---
+    # Events more than 2h away are labelled "do NOT surface" so the LLM
+    # never needs to do time arithmetic — it just sees the explicit label.
     calendar_text: str = ""
     try:
         if calendar_client is not None:
-            calendar_text = calendar_client.events_summary_text() or ""
+            events = calendar_client.list_events(day=now) or []
+            within_2h_lines: list[str] = []
+            later_lines: list[str] = []
+            for ev in events:
+                start_info = ev.get("start", {})
+                start_str = start_info.get("dateTime") or start_info.get("date") or ""
+                title = ev.get("summary", "(no title)")
+                if not start_str:
+                    later_lines.append(title)
+                    continue
+                try:
+                    if "T" in start_str:
+                        start_dt = datetime.fromisoformat(start_str)
+                        if start_dt.tzinfo is None:
+                            start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        hours_until = (start_dt - now).total_seconds() / 3600
+                        time_str = start_str.split("T")[1][:5]
+                        if 0 <= hours_until <= 2:
+                            within_2h_lines.append(
+                                f"{time_str} {title} ({hours_until:.1f}h away — actionable)"
+                            )
+                        else:
+                            later_lines.append(f"{time_str} {title}")
+                    else:
+                        later_lines.append(title)
+                except Exception:
+                    later_lines.append(title)
+            if within_2h_lines:
+                calendar_text = "WITHIN 2 HOURS — consider surfacing:\n" + "\n".join(within_2h_lines)
+                if later_lines:
+                    calendar_text += "\n\nLater today — do NOT surface:\n" + "\n".join(later_lines)
+            elif later_lines:
+                calendar_text = "No events within 2 hours.\nLater today — do NOT surface:\n" + "\n".join(later_lines)
     except Exception as exc:
         _logger.warning("gather_context: calendar fetch failed: %s: %s", type(exc).__name__, exc)
         calendar_text = ""
