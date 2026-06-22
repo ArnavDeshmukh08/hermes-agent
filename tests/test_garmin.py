@@ -1,7 +1,7 @@
-"""Tests for integrations.garmin.GarminClient.
+"""Tests for integrations.garmin.GarminClient (HTTP-client edition).
 
-All 5 tests are fully offline — zero real network calls.
-garminconnect need not be installed for these tests to pass.
+All tests are fully offline — zero real network calls.
+garminconnect must NOT be imported by the module under test.
 
 sys.path wiring mirrors tests/test_memory_updater.py.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -20,154 +21,216 @@ import pytest  # noqa: E402
 from integrations.garmin import GarminClient  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Helper fake
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _make_sleep_response(
-    sleep_secs: int = 22320,
-    deep_secs: int = 3960,
-    rem_secs: int = 0,
-    score_value: int | None = 72,
+# Patch target: the module-level _get function that performs HTTP calls.
+_GET = "integrations.garmin._get"
+
+
+def _sleep_payload(
+    total_sleep_h: float = 6.2,
+    deep_h: float = 1.1,
+    rem_h: float = 0.0,
+    score: int | None = 72,
 ) -> dict:
-    """Build a realistic Garmin sleep-data response dict."""
-    response: dict = {
-        "dailySleepDTO": {
-            "sleepTimeSeconds": sleep_secs,
-            "deepSleepSeconds": deep_secs,
-            "remSleepSeconds": rem_secs,
-        },
+    return {
+        "total_sleep_h": total_sleep_h,
+        "deep_h": deep_h,
+        "rem_h": rem_h,
+        "score": score,
     }
-    if score_value is not None:
-        response["sleepScores"] = {"overall": {"value": score_value}}
-    return response
 
 
-class FakeGarmin:
-    """Minimal stand-in for garminconnect.Garmin."""
-
-    def __init__(self, response: dict | None = None) -> None:
-        self._response = response
-
-    def get_sleep_data(self, date_str: str) -> dict | None:  # noqa: ARG002
-        return self._response
+def _stats_payload() -> dict:
+    return {
+        "steps": 8421,
+        "body_battery_high": 87,
+        "calories": 2100,
+        "stress_avg": 35,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — no credentials → everything returns None / ''
+# Test 1 — happy path: sleep data parsed correctly
 # ---------------------------------------------------------------------------
 
-def test_no_creds_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no credentials configured, both methods degrade gracefully."""
-    monkeypatch.delenv("GARMIN_EMAIL", raising=False)
-    monkeypatch.delenv("GARMIN_PASSWORD", raising=False)
+def test_sleep_parsed_correctly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A realistic Mac-service response is parsed into the expected dict."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
 
-    # garminconnect must not have been imported by this test
-    imported_before = "garminconnect" in sys.modules
-
-    client = GarminClient()  # no args, no env vars
-    assert client.last_night_sleep() is None
-    assert client.sleep_summary_text() == ""
-
-    # Verify garminconnect was never imported during this test
-    if not imported_before:
-        assert "garminconnect" not in sys.modules
-
-
-# ---------------------------------------------------------------------------
-# Test 2 — _login() returns None → both methods degrade
-# ---------------------------------------------------------------------------
-
-def test_login_failure_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When _login() returns None, both public methods return None/''."""
-    client = GarminClient(email="x@example.com", password="secret")
-    monkeypatch.setattr(client, "_login", lambda: None)
-
-    assert client.last_night_sleep() is None
-    assert client.sleep_summary_text() == ""
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — happy path with realistic mock response
-# ---------------------------------------------------------------------------
-
-def test_sleep_parsed_from_mock_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A realistic Garmin response is parsed correctly into the summary dict."""
-    fake_garmin = FakeGarmin(response=_make_sleep_response())
-
-    client = GarminClient(email="x@example.com", password="secret")
-    monkeypatch.setattr(client, "_login", lambda: fake_garmin)
-
-    result = client.last_night_sleep(day="2026-06-19")
+    with patch(_GET, return_value=_sleep_payload()):
+        client = GarminClient()
+        result = client.last_night_sleep(day="2026-06-19")
 
     assert result is not None
-    assert abs(result["total_sleep_h"] - 6.2) < 0.05   # 22320 / 3600 ≈ 6.2
-    assert abs(result["deep_h"] - 1.1) < 0.05          # 3960 / 3600 ≈ 1.1
+    assert abs(result["total_sleep_h"] - 6.2) < 0.05
+    assert abs(result["deep_h"] - 1.1) < 0.05
     assert result["score"] == 72
 
-    text = client.sleep_summary_text(day="2026-06-19")
+    with patch(_GET, return_value=_sleep_payload()):
+        text = client.sleep_summary_text(day="2026-06-19")
+
     assert "6.2h" in text
     assert "score 72" in text
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — malformed / empty response → None, no exception
+# Test 2 — no score field → score is None, text has no "score" part
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("bad_response", [{}, None])
-def test_malformed_response_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-    bad_response: dict | None,
-) -> None:
-    """Empty or None response from the API yields None, never an exception."""
-    fake_garmin = FakeGarmin(response=bad_response)
+def test_sleep_no_score(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When score is None in the response the text omits the score part."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
 
-    client = GarminClient(email="x@example.com", password="secret")
-    monkeypatch.setattr(client, "_login", lambda: fake_garmin)
+    with patch(_GET, return_value=_sleep_payload(score=None)):
+        client = GarminClient()
+        result = client.last_night_sleep(day="2026-06-19")
 
-    assert client.last_night_sleep() is None
-    assert client.sleep_summary_text() == ""
+    assert result is not None
+    assert result["score"] is None
 
+    with patch(_GET, return_value=_sleep_payload(score=None)):
+        text = client.sleep_summary_text(day="2026-06-19")
 
-# ---------------------------------------------------------------------------
-# Test 4b — present-but-empty DTO (zero/missing sleep) → None, not "0.0h sleep"
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "dto",
-    [
-        {"deepSleepSeconds": 0},                       # no sleepTimeSeconds key
-        {"sleepTimeSeconds": 0, "deepSleepSeconds": 0},  # explicit zero
-    ],
-)
-def test_zero_sleep_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-    dto: dict,
-) -> None:
-    """A non-empty response whose DTO has no real sleep (0 / missing seconds)
-    must degrade to None — never a misleading '0.0h sleep' in the briefing.
-    Reproduces the live VPS case where a rate-limited login returned a stub DTO.
-    """
-    fake_garmin = FakeGarmin(response={"dailySleepDTO": dto})
-
-    client = GarminClient(email="x@example.com", password="secret")
-    monkeypatch.setattr(client, "_login", lambda: fake_garmin)
-
-    assert client.last_night_sleep() is None
-    assert client.sleep_summary_text() == ""
+    assert "score" not in text
+    assert "h sleep" in text
 
 
 # ---------------------------------------------------------------------------
-# Test 5 — garminconnect ImportError is swallowed inside _login
+# Test 3 — zero sleep → None (never "0.0h sleep" in briefing)
 # ---------------------------------------------------------------------------
 
-def test_import_error_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If garminconnect is not importable, _login() returns None gracefully."""
-    # Setting sys.modules['garminconnect'] = None makes
-    # `from garminconnect import Garmin` raise ImportError.
-    monkeypatch.setitem(sys.modules, "garminconnect", None)  # type: ignore[arg-type]
+def test_zero_sleep_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A response with total_sleep_h == 0 must degrade to None."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
 
-    client = GarminClient(email="x@example.com", password="secret")
-    # _login must catch the ImportError and return None
-    assert client._login() is None
-    assert client.last_night_sleep() is None
-    assert client.sleep_summary_text() == ""
+    with patch(_GET, return_value=_sleep_payload(total_sleep_h=0.0)):
+        client = GarminClient()
+        assert client.last_night_sleep() is None
+
+    with patch(_GET, return_value=_sleep_payload(total_sleep_h=0.0)):
+        assert client.sleep_summary_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — {"error": "no_data"} → None
+# ---------------------------------------------------------------------------
+
+def test_last_night_sleep_returns_none_on_no_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When Mac service says no_data, last_night_sleep returns None."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    with patch(_GET, return_value={"error": "no_data"}):
+        client = GarminClient()
+        assert client.last_night_sleep(day="2026-06-19") is None
+
+    with patch(_GET, return_value={"error": "no_data"}):
+        assert client.sleep_summary_text(day="2026-06-19") == ""
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — network timeout → None, no exception propagated
+# ---------------------------------------------------------------------------
+
+def test_last_night_sleep_returns_none_on_mac_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ConnectionError from _get is caught; returns None without raising."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    with patch(_GET, side_effect=ConnectionError("Mac is down")):
+        client = GarminClient()
+        assert client.last_night_sleep(day="2026-06-19") is None
+
+    with patch(_GET, side_effect=ConnectionError("Mac is down")):
+        assert client.sleep_summary_text(day="2026-06-19") == ""
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — get_stats returns steps
+# ---------------------------------------------------------------------------
+
+def test_get_stats_returns_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_stats parses the Mac-service stats payload correctly."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    with patch(_GET, return_value=_stats_payload()):
+        client = GarminClient()
+        result = client.get_stats(day="2026-06-19")
+
+    assert result is not None
+    assert result["steps"] == 8421
+    assert result["body_battery_high"] == 87
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — get_stats network failure → None
+# ---------------------------------------------------------------------------
+
+def test_get_stats_returns_none_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_stats returns None on any network error, never raises."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    with patch(_GET, side_effect=TimeoutError("timed out")):
+        client = GarminClient()
+        assert client.get_stats(day="2026-06-19") is None
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — get_daily_summary returns date and nested dicts
+# ---------------------------------------------------------------------------
+
+def test_get_daily_summary_returns_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_daily_summary returns the full nested structure from the Mac service."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    payload = {
+        "date": "2026-06-19",
+        "sleep": _sleep_payload(),
+        "stats": _stats_payload(),
+    }
+
+    with patch(_GET, return_value=payload):
+        client = GarminClient()
+        result = client.get_daily_summary()
+
+    assert result is not None
+    assert result["date"] == "2026-06-19"
+    assert result["sleep"]["total_sleep_h"] == 6.2
+    assert result["stats"]["steps"] == 8421
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — get_daily_summary network failure → None
+# ---------------------------------------------------------------------------
+
+def test_get_daily_summary_returns_none_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_daily_summary returns None on any network error, never raises."""
+    monkeypatch.setenv("JACK_GARMIN_URL", "http://fake-mac:8765")
+
+    with patch(_GET, side_effect=ConnectionError("unreachable")):
+        client = GarminClient()
+        assert client.get_daily_summary() is None
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — garminconnect must NOT appear as an import in the module source
+# ---------------------------------------------------------------------------
+
+def test_no_garminconnect_import() -> None:
+    """The integrations.garmin module must not import garminconnect at all."""
+    import ast
+
+    garmin_path = Path(_REPO_ROOT) / "integrations" / "garmin.py"
+    source = garmin_path.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            else:
+                names = [node.module or ""]
+            for name in names:
+                assert "garminconnect" not in (name or ""), (
+                    f"garminconnect import found in integrations/garmin.py: {ast.dump(node)}"
+                )
