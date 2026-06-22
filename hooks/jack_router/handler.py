@@ -167,6 +167,19 @@ def _store():
     return _STORE
 
 
+_GOAL_STORE = None
+
+
+def _goal_store():
+    """Lazy singleton GoalStore (shares ~/.hermes/goals.json with the reasoner)."""
+    global _GOAL_STORE
+    if _GOAL_STORE is None:
+        from jack_goals.store import GoalStore  # lazy import
+
+        _GOAL_STORE = GoalStore()
+    return _GOAL_STORE
+
+
 def _fmt_ist(value) -> str:
     """Render a stored UTC time as friendly IST, e.g. '9:00 AM IST, Thu Jun 19'."""
     from datetime import datetime, timezone
@@ -370,6 +383,143 @@ def _extract_event_title(text: str) -> str:
     return t or text.strip()
 
 
+def _match_goal(hint: str, goals: list):
+    """Pick the goal a query/update refers to by word overlap on title/target."""
+    h = (hint or "").lower()
+    best, score = None, 0
+    for g in goals:
+        words = [w for w in re.findall(r"\w+", (g.title + " " + g.target).lower()) if len(w) > 2]
+        s = sum(1 for w in words if w in h)
+        if s > score:
+            best, score = g, s
+    if best:
+        return best
+    return goals[0] if len(goals) == 1 else None
+
+
+def _garmin_progress_line(metric: str) -> str:
+    """Best-effort 'actual data' line for a garmin-backed goal. '' on failure."""
+    try:
+        from integrations.garmin import GarminClient  # lazy import
+
+        client = GarminClient()
+        if metric == "garmin_steps":
+            stats = client.get_stats()
+            if stats and stats.get("steps") is not None:
+                return f"{stats['steps']} steps today"
+        elif metric == "garmin_runs":
+            stats = client.get_stats()
+            if stats and stats.get("calories") is not None:
+                return f"{stats.get('calories')} cal today"
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+async def _run_goal(message, route) -> None:
+    """Create / query / update goals against the durable GoalStore — no agent loop.
+
+    Framing guardrail: Jack TRACKS Arnav's own plan. Confirmations reflect what
+    HE said; we never inject a training/diet/medical prescription here.
+    """
+    channel = message.channel
+    action = route.params.get("action", "query")
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+    try:
+        from jack_goals.intents import (  # lazy import
+            confirm_create_message,
+            parse_create_goal,
+            parse_query_goal,
+            parse_update_goal,
+        )
+
+        if action == "create":
+            async with _sem():
+                from lib.llm import complete  # lazy import
+
+                fields = await asyncio.to_thread(parse_create_goal, text, complete)
+            goal = await asyncio.to_thread(
+                _goal_store().create_goal,
+                fields["title"],
+                fields["type"],
+                fields["target"],
+                fields["plan"],
+                fields["metric"],
+                fields.get("deadline"),
+            )
+            confirmation = confirm_create_message(goal.to_dict())
+            await channel.send(confirmation)
+            _log(f"goal created: {goal.id} — {goal.title}")
+            return
+
+        if action == "query":
+            q = parse_query_goal(text)
+            goals = await asyncio.to_thread(_goal_store().list_active_goals)
+            if not goals:
+                await channel.send(
+                    "You've got no active goals right now. "
+                    "Tell me one — e.g. \"my goal is to run a marathon in 10 weeks\"."
+                )
+                return
+            target_goal = (
+                _match_goal(q.get("goal_hint", ""), goals)
+                if q.get("query_type") == "progress"
+                else None
+            )
+            lines = []
+            for g in goals if target_goal is None else [target_goal]:
+                extra = ""
+                if g.is_garmin:
+                    extra = await asyncio.to_thread(_garmin_progress_line, g.metric)
+                deadline = f" (by {g.deadline})" if g.deadline else ""
+                lines.append(f"• {g.title}{deadline}{(' — ' + extra) if extra else ''}")
+            count = len(goals)
+            header = (
+                f"You've got {count} active goal" + ("s" if count != 1 else "")
+                + ". Reflecting back what you set:"
+            )
+            await channel.send(header + "\n" + "\n".join(lines))
+            return
+
+        # action == "update"
+        async with _sem():
+            from lib.llm import complete  # lazy import
+
+            upd = await asyncio.to_thread(parse_update_goal, text, complete)
+        goals = await asyncio.to_thread(_goal_store().list_active_goals)
+        if not goals:
+            await channel.send("No active goals to update yet.")
+            return
+        target_goal = _match_goal(upd.get("goal_hint", ""), goals)
+        if target_goal is None:
+            await channel.send(
+                "Which goal? Try \"what are my goals\" first, "
+                "then \"mark the marathon goal done\"."
+            )
+            return
+        updates = upd.get("updates", {})
+        if "progress_note" in updates:
+            await asyncio.to_thread(
+                _goal_store().append_progress, target_goal.id, updates["progress_note"]
+            )
+            await channel.send(f"Logged against {target_goal.title}. Keeping count.")
+            return
+        new_status = updates.get("status")
+        if new_status in ("done", "paused", "active"):
+            await asyncio.to_thread(_goal_store().set_status, target_goal.id, new_status)
+            verb = {"done": "marked complete", "paused": "paused", "active": "back on"}[new_status]
+            tail = " Nice work." if new_status == "done" else ""
+            await channel.send(f"Done — {target_goal.title} {verb}.{tail}")
+            return
+        await channel.send(
+            f"Got the goal ({target_goal.title}) but not sure what to change — "
+            "done, pause, or a progress note?"
+        )
+    except Exception as e:  # noqa: BLE001 — never crash the gateway on a goal turn
+        await channel.send("⚠️ Goal system hiccup — try that again?")
+        _log(f"goal failed: {e!r}")
+
+
 def _parse_config_request(text: str) -> dict | None:
     """Extract {key, value} from a config-change request using the LLM.
 
@@ -561,6 +711,9 @@ async def _dispatch(adapter, message, route) -> None:
         return
     if route.intent == "self_config":
         _fire(_run_self_config(message, route))
+        return
+    if route.intent == "goal":
+        _fire(_run_goal(message, route))
         return
     if route.intent == "proactive":
         if route.params.get("action") == "status":

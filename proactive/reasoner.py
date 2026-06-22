@@ -30,6 +30,7 @@ _MEMORY_SEARCH_LIMIT = 12
 _RAW_LOG_CHARS = 200
 _VALID_PRIORITIES = (P1, P2, P3)
 _logger = logging.getLogger("proactive.reasoner")
+_MAX_GOALS = 12  # cap the goals block so the prompt stays bounded
 # Kept outside the f-string in gather_context() to avoid double-brace escaping
 # errors and make the schema independently readable.
 # nudge_type is mapped by domain so the LLM understands the intent, not just
@@ -163,6 +164,47 @@ def gather_context(
         _logger.warning("gather_context: reminders fetch failed: %s: %s", type(exc).__name__, exc)
         reminders_text = ""
 
+    # --- active goals ---
+    goals_text: str = ""
+    try:
+        from jack_goals.store import list_active_goals  # lazy — jack_goals may not exist yet on VPS
+        active_goals = list_active_goals()
+        if active_goals:
+            active_goals = active_goals[:_MAX_GOALS]
+            goal_lines: list[str] = []
+            for g in active_goals:
+                metric_data = ""
+                if g.metric == "garmin_steps":
+                    try:
+                        from integrations.garmin import GarminClient
+                        stats = GarminClient().get_stats()
+                        if stats and stats.get("steps"):
+                            metric_data = f" | today's steps: {stats['steps']}"
+                    except Exception:
+                        pass
+                elif g.metric == "garmin_runs":
+                    try:
+                        from integrations.garmin import GarminClient
+                        stats = GarminClient().get_stats()
+                        if stats and stats.get("distance_km"):
+                            metric_data = f" | today's distance: {stats['distance_km']:.1f}km"
+                    except Exception:
+                        pass
+                deadline_str = f" | deadline: {g.deadline}" if g.deadline else ""
+                plan_str = f" | plan: {g.plan[:100]}" if g.plan else ""
+                notes_str = ""
+                if g.progress_notes:
+                    notes_str = f" | last note: {g.progress_notes[-1][:80]}"
+                goal_lines.append(
+                    f"- [{g.type}] {g.title} | target: {g.target}{deadline_str}{plan_str}{metric_data}{notes_str}"
+                )
+            goals_text = "\n".join(goal_lines)
+    except ImportError:
+        pass  # jack_goals not available on this VPS yet
+    except Exception as exc:
+        _logger.warning("gather_context: goals fetch failed: %s: %s", type(exc).__name__, exc)
+        goals_text = ""
+
     # --- time context ---
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -181,6 +223,7 @@ def gather_context(
     rem = reminders_text or "No pending reminders."
     already = already_sent if already_sent is not None else []
     already_lines = "\n".join(f"- {s}" for s in already) if already else "Nothing surfaced yet today."
+    goals_section = goals_text or "No active goals."
 
     context_str = f"""# Current time
 {now_ist.strftime("%A")} {now_ist.strftime("%Y-%m-%d")} {now_ist.hour}:00 IST
@@ -195,6 +238,11 @@ def gather_context(
 # Pending reminders
 {rem}
 
+# Active Goals
+# (These are goals ARNAV set himself. Each line: his target, HIS stated plan, and
+#  actual data where available. Reflect his plan back — never invent prescriptions.)
+{goals_section}
+
 # Already surfaced today
 {already_lines}
 
@@ -208,7 +256,8 @@ Before you answer, silently evaluate EACH domain below in order. Do not skip any
 2. GOALS — Is there a goal or project (e.g. Vytal, the Masters applications) where a small action right now meaningfully moves it forward or prevents slippage? Only if it is genuinely actionable this hour.
 3. CALENDAR — Is there an event starting in the NEXT 2 HOURS that needs prep, travel, or a heads-up? Events more than 2 hours away MUST NOT be surfaced. Do not surface routine/recurring events the user clearly already knows about unless prep is actually required.
 4. HEALTH — Is there a health-relevant action (sleep, hydration, a missed habit) that is timely right now and not nagging?
-5. DEFAULT — If none of the above produced a concrete, timely, actionable reason, return an EMPTY list. This is the expected outcome for most cycles.
+5. GOALS_TRACKING — For each active goal listed above, compare Arnav's stated plan to actual data (if available). Surface ONLY if: (a) there is a real measurable deviation from HIS OWN stated plan, (b) a scheduled check-in is genuinely due today, or (c) there is honest, specific encouragement to give (not generic). CRITICAL FRAMING RULE: You are a tracking mirror, not a coach. Reflect his plan back to him — NEVER invent training schedules, dietary advice, medical prescriptions, pacing targets, or recovery protocols. If no plan was stated, do NOT surface this goal unless Arnav explicitly asks. Bias to silence: a goal on track needs no nudge.
+6. DEFAULT — If none of the above produced a concrete, timely, actionable reason, return an EMPTY list. This is the expected outcome for most cycles.
 
 Decision rules:
 - When uncertain, return []. Silence is the safe default and is never penalized.

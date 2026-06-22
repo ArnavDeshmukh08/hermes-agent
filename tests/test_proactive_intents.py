@@ -186,22 +186,36 @@ class TestProactiveDispatch(unittest.TestCase):
         """Dispatch should fire _run_proactive_control for control action."""
         msg = _make_message("stop nudges")
         route = router.Route("proactive", {"action": "control", "control": "off", "text": "stop nudges"})
-        with patch("handler._fire") as mock_fire:
+        received_coros: list = []
+
+        def _capturing_fire(coro):
+            received_coros.append(coro)
+
+        with patch("handler._fire", side_effect=_capturing_fire):
             _run(_dispatch_sync(msg, route))
-            # Check that _fire was called exactly once
-            self.assertEqual(mock_fire.call_count, 1)
-            # The argument should be a coroutine
-            coro = mock_fire.call_args[0][0]
-            self.assertTrue(asyncio.iscoroutine(coro))
+        # Close captured coroutines to silence unawaited-coroutine warnings.
+        for c in received_coros:
+            c.close()
+        # Check that _fire was called exactly once with a coroutine.
+        self.assertEqual(len(received_coros), 1)
+        self.assertTrue(asyncio.iscoroutine(received_coros[0]))
 
     def test_dispatch_status_fires_correct_handler(self):
         """Dispatch should fire _run_proactive_status for status action."""
         msg = _make_message("what's my proactive status")
         route = router.Route("proactive", {"action": "status", "text": "what's my proactive status"})
-        with patch("handler._fire") as mock_fire:
+        received_coros: list = []
+
+        def _capturing_fire(coro):
+            received_coros.append(coro)
+
+        with patch("handler._fire", side_effect=_capturing_fire):
             _run(_dispatch_sync(msg, route))
-            # Check that _fire was called exactly once
-            self.assertEqual(mock_fire.call_count, 1)
+        # Close captured coroutines to silence unawaited-coroutine warnings.
+        for c in received_coros:
+            c.close()
+        # Check that _fire was called exactly once.
+        self.assertEqual(len(received_coros), 1)
 
 
 async def _dispatch_sync(message, route):

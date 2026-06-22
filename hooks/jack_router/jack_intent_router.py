@@ -178,6 +178,49 @@ _SELF_GENERIC_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# Goal intents. Checked AFTER calendar/reminder/self_config/proactive and
+# BEFORE the conversational fallthrough. Query first (read-only), then update
+# (mutating, needs an explicit verb), then create (broadest).
+# ---------------------------------------------------------------------------
+_GOAL_QUERY_RE = re.compile(
+    r"\b(?:"
+    r"how\s+am\s+i\s+(?:tracking|doing|progressing)\b|"
+    r"what\s+are\s+my\s+goals\b|"
+    r"(?:show|list|view)\s+(?:me\s+)?(?:my\s+)?goals?\b|"
+    r"goal\s+(?:progress|status)\b|"
+    r"am\s+i\s+on\s+track\b|"
+    # "my goals" — plural only to avoid snagging "my goal is ..." (create phrasing)
+    r"my\s+goals\b"
+    r")",
+    re.IGNORECASE,
+)
+# Mutating: requires an explicit action verb tied to the word 'goal'
+# (or a bare 'goal done'), so ordinary chat never mutates a goal.
+_GOAL_UPDATE_RE = re.compile(
+    r"\b(?:"
+    r"mark\b[^.!?]*\bgoal\b[^.!?]*\b(?:done|complete[d]?|finished)\b|"
+    r"\bgoal\b\s+(?:done|complete[d]?|finished)\b|"
+    r"(?:pause|resume|unpause|update|delete|remove)\b[^.!?]*\bgoal\b|"
+    r"\bgoal\b[^.!?]*\b(?:done|complete[d]?|finished|paused?)\b"
+    r")",
+    re.IGNORECASE,
+)
+# Create: explicit goal-setting phrasings. "i want to / i'm trying to" require a
+# following intent verb so they don't steal "i want to know the weather".
+_GOAL_CREATE_RE = re.compile(
+    r"\b(?:"
+    r"new\s+goal\s*:|"
+    r"my\s+goal\s+is\b|"
+    r"set\s+(?:a\s+)?goal\b|"
+    r"help\s+me\s+track\b|"
+    r"i'?m\s+trying\s+to\s+(?:track|achieve|work\s+on|train|save|hit|reach|build|run|lose|gain|finish)\b|"
+    r"i\s+want\s+to\s+(?:track|achieve|work\s+on|train|save|hit|reach|build)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def _proactive_control_value(t: str) -> str:
     """Return 'off' for stop/pause/mute/disable verbs, 'on' for enable/resume verbs.
 
@@ -211,7 +254,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "goal" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -262,6 +305,15 @@ def classify(text: str) -> Route | None:
         return Route("proactive", {"action": "status", "text": t})
     if _PROACTIVE_CONTROL_RE.search(t):
         return Route("proactive", {"action": "control", "control": _proactive_control_value(t), "text": t})
+    # Goal branch — after all other operational intents, before conversational.
+    # Query checked first (read-only, harmless false-positive), then update
+    # (requires explicit verb + "goal"), then create (broadest).
+    if _GOAL_QUERY_RE.search(t):
+        return Route("goal", {"action": "query", "text": t})
+    if _GOAL_UPDATE_RE.search(t):
+        return Route("goal", {"action": "update", "text": t})
+    if _GOAL_CREATE_RE.search(t):
+        return Route("goal", {"action": "create", "text": t})
     return Route("conversational", {"text": t})
 
 
