@@ -1,18 +1,19 @@
 """ClaudeBridge — ingest a pasted Claude/claude.ai session transcript, summarize
-it via the LLM, append durable facts to USER.md, and ping Discord.
+it via the LLM, push durable facts to Mem0 (via JackMemoryClient), and ping Discord.
 
 Usage (CLI):
     python -m integrations.claude_bridge --text "paste transcript here"
     echo "transcript" | python -m integrations.claude_bridge
 
-Design rules (mirrors jack_memory/updater.py):
-- All external deps (lib.llm, jack_memory.updater, reminders.notifier) are
+Design rules:
+- All external deps (lib.llm, jack_memory.client, reminders.notifier) are
   imported lazily, inside methods — never at module import time. Tests inject
   fakes so no network or filesystem dep is required to import this module.
 - Every constructor arg defaults to None and is resolved lazily on first use.
-- Graceful degradation: blank input → no-op; LLM failure → ''; notify failure
-  → False. run() never raises into the caller; each step is independently
-  guarded so a notify failure cannot zero out an already-successful append.
+- Graceful degradation: blank input → no-op with error='blank input';
+  LLM failure → error='no output'; Mem0 failure → error captured, notified=False.
+- run() NEVER reports notified:True when appended:0 — that is a false success.
+  Discord notification fires only after facts are confirmed stored in Mem0.
 """
 
 from __future__ import annotations
@@ -36,18 +37,16 @@ _SUMMARISE_SYSTEM = (
 # prompt is prepended.
 _MAX_TRANSCRIPT_CHARS = 8_000
 
-_WORK_SECTION = "WORK & PROJECTS"
-
 
 class ClaudeBridge:
-    """Summarise a pasted Claude session and push the summary into Jack's memory.
+    """Summarise a pasted Claude session and push the summary into Mem0.
 
     All three external collaborators are injectable so tests can pass fakes
     without any network or filesystem access:
 
         bridge = ClaudeBridge(
             complete_fn=fake_llm,
-            updater=FakeUpdater(),
+            mem0_client=FakeMem0Client(),
             send_fn=fake_discord,
         )
 
@@ -57,12 +56,12 @@ class ClaudeBridge:
     def __init__(
         self,
         complete_fn: Callable | None = None,
-        updater=None,
+        mem0_client=None,
         send_fn: Callable | None = None,
     ) -> None:
         self._complete_fn = complete_fn   # None → lib.llm.complete (lazy)
-        self._updater = updater           # None → MemoryUpdater()   (lazy)
-        self._send_fn = send_fn           # None → send_message      (lazy)
+        self._mem0_client = mem0_client   # None → JackMemoryClient.from_env() (lazy)
+        self._send_fn = send_fn           # None → send_message (lazy)
 
     # ------------------------------------------------------------------
     # Lazy resolver helpers
@@ -74,12 +73,12 @@ class ClaudeBridge:
         from lib import llm  # noqa: PLC0415 — intentional lazy import
         return llm.complete
 
-    def _resolve_updater(self):
-        if self._updater is not None:
-            return self._updater
-        from jack_memory.updater import MemoryUpdater  # noqa: PLC0415
-        self._updater = MemoryUpdater()
-        return self._updater
+    def _resolve_mem0_client(self):
+        if self._mem0_client is not None:
+            return self._mem0_client
+        from jack_memory.client import JackMemoryClient  # noqa: PLC0415
+        self._mem0_client = JackMemoryClient.from_env()
+        return self._mem0_client
 
     def _resolve_send_fn(self) -> Callable:
         if self._send_fn is not None:
@@ -118,28 +117,29 @@ class ClaudeBridge:
         except Exception:  # noqa: BLE001 — best-effort; never propagate
             return ""
 
-    def push_to_memory(self, summary: str, today=None) -> int:
-        """Append each non-empty line of `summary` as a WORK & PROJECTS fact.
+    def push_to_memory(self, summary: str) -> int:
+        """Push the summary into Mem0 via JackMemoryClient.add().
 
-        Returns the number of facts appended (0 for empty summary).
-        Unknown section labels are safely routed to THINGS JACK HAS LEARNED by
-        MemoryUpdater, so the hard-coded section here is just the best default.
+        mem0's extraction LLM deduplicates and structures the bullet facts
+        before storing them in Qdrant. Returns the count of ADD + UPDATE events
+        from mem0 (0 on empty input or any error — never raises).
         """
         if not summary or not summary.strip():
             return 0
 
-        learnings = []
-        for line in summary.splitlines():
-            # Strip leading bullet characters (-, *, •) and whitespace.
-            fact = line.strip().lstrip("-*•").strip()
-            if fact:
-                learnings.append({"section": _WORK_SECTION, "fact": fact})
-
-        if not learnings:
+        client = self._resolve_mem0_client()
+        try:
+            result = client.add(summary, metadata={"source": "claude_bridge"})
+        except Exception:  # noqa: BLE001 — Mac extractor down, Qdrant down, etc.
             return 0
 
-        updater = self._resolve_updater()
-        return updater.update_user_md(learnings, today)
+        if isinstance(result, dict):
+            stored = [
+                r for r in result.get("results", [])
+                if r.get("event") in ("ADD", "UPDATE")
+            ]
+            return len(stored)
+        return 1 if result else 0
 
     def notify(self, summary: str) -> bool:
         """Post the summary to Discord.
@@ -153,39 +153,42 @@ class ClaudeBridge:
         except Exception:  # noqa: BLE001 — delivery failure must not propagate
             return False
 
-    def run(self, session_text: str, today=None) -> dict:
-        """Full pipeline: summarize → push to memory → notify Discord.
+    def run(self, session_text: str) -> dict:
+        """Full pipeline: summarize → push to Mem0 → notify Discord.
 
-        Each step is independently guarded. A notify failure cannot zero out
-        'appended'. Never raises.
+        Discord notification fires ONLY when facts are confirmed stored in Mem0.
+        notified:True with appended:0 is a false success — this method never
+        produces that combination.
 
         Returns:
             {
-                'summary':   str,   # '' on blank input or LLM failure
-                'appended':  int,   # facts written to USER.md
-                'notified':  bool,  # True only if Discord delivery succeeded
+                'summary':   str,        # '' on blank input or LLM failure
+                'appended':  int,        # ADD+UPDATE events written to Mem0
+                'notified':  bool,       # True only if appended>0 and Discord OK
+                'error':     str|None,   # set when a step produces no output
             }
         """
-        summary = ""
-        appended = 0
-        notified = False
+        summary = self.summarize(session_text)
 
-        try:
-            summary = self.summarize(session_text)
-        except Exception:  # noqa: BLE001
-            summary = ""
+        if not summary:
+            error = (
+                "blank input" if not (session_text and session_text.strip())
+                else "LLM returned empty summary"
+            )
+            return {"summary": "", "appended": 0, "notified": False, "error": error}
 
-        try:
-            appended = self.push_to_memory(summary, today)
-        except Exception:  # noqa: BLE001
-            appended = 0
+        appended = self.push_to_memory(summary)
 
-        try:
-            notified = self.notify(summary)
-        except Exception:  # noqa: BLE001
-            notified = False
+        if appended == 0:
+            return {
+                "summary": summary,
+                "appended": 0,
+                "notified": False,
+                "error": "nothing stored in Mem0",
+            }
 
-        return {"summary": summary, "appended": appended, "notified": notified}
+        notified = self.notify(summary)
+        return {"summary": summary, "appended": appended, "notified": notified, "error": None}
 
 
 # ---------------------------------------------------------------------------
