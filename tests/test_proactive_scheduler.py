@@ -72,7 +72,7 @@ class TestRunOnceCallsEngine(unittest.TestCase):
         engine = _FakeEngine(return_value=2)
         scheduler = _make_scheduler(engine=engine, user_id="42")
 
-        with patch.dict(os.environ, {"JACK_PROACTIVE_ENABLED": "1"}):
+        with patch.dict(os.environ, {"JACK_PROACTIVE_ENABLED": "1", "JACK_PROACTIVE_ENGINE": "legacy"}):
             # Act
             result = scheduler.run_once()
 

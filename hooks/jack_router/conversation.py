@@ -57,12 +57,17 @@ _MEMORY_QUERY_RE = re.compile(
 )
 
 _MEMORY_SUMMARY_GUIDANCE = (
-    "Below is everything you remember about Arnav (your living memory of him). "
-    "Summarize it back to him naturally, the way a close friend who knows him "
-    "would — warm, in your own words, grouped sensibly (who he is, his people, "
-    "his work, what he's into). Do NOT dump the raw notes or headers, don't list "
-    "every line robotically, and don't invent anything that isn't here. A few "
-    "tight paragraphs or a short grouped rundown is perfect."
+    "Below is everything you remember about this person. "
+    "Summarize it back to them warmly, the way a close friend would — "
+    "grouped sensibly (who they are, their people, their work, what they're into). "
+    "CRITICAL voice rules:\n"
+    "1. ALWAYS use second person: 'you', 'your', 'you've'. "
+    "NEVER say their name or use third person ('he', 'his', 'Arnav said').\n"
+    "2. NEVER reference 'my memory', 'my records', 'my notes', or 'you told me'. "
+    "Just speak naturally as a close friend who knows them well.\n"
+    "3. Do NOT dump raw notes or headers. Do NOT list every line robotically. "
+    "Don't invent anything not already here. "
+    "A few tight warm paragraphs or a short grouped rundown is perfect."
 )
 
 _FALLBACK_PERSONALITY = (
@@ -178,6 +183,16 @@ class JackConversationHandler:
         self._profile = self._load_profile(user_path)
         self._sessions: dict[str, list[dict[str, str]]] = {}
         self._memory = None  # lazy MemoryUpdater (built on first use)
+        # Lazy retriever: JackMemoryClient on mem0 backend, None on flatfile
+        self._retriever = self._init_retriever()
+
+    def _init_retriever(self):
+        """Build retriever if JACK_MEMORY_BACKEND=mem0, else None. Never raises."""
+        try:
+            from jack_memory.backend import build_retriever
+            return build_retriever()
+        except Exception:  # noqa: BLE001 — degrade to flatfile silently
+            return None
 
     # -- loading (cached at construction) ------------------------------------
     @staticmethod
@@ -211,10 +226,12 @@ class JackConversationHandler:
             del history[: len(history) - max_messages]
 
     # -- prompt assembly ------------------------------------------------------
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, memory_block: str = "") -> str:
         parts = [self._personality]
         if self._profile:
             parts.append("# About the person you're talking to\n" + self._profile)
+        if memory_block:
+            parts.append(memory_block)
         parts.append("# How to behave right now\n" + _NO_TOOLS_GUIDANCE)
         return "\n\n".join(parts)
 
@@ -228,10 +245,26 @@ class JackConversationHandler:
         lines.append("Jack:")
         return "\n".join(lines)
 
-    def build_prompt(self, user_message: str, user_id: str) -> tuple[str, str]:
+    def build_prompt(
+        self,
+        user_message: str,
+        user_id: str,
+        memories: list | None = None,
+    ) -> tuple[str, str]:
         """Assemble (system, user) within the token budget, trimming the oldest
-        exchanges first if needed. Guarantees the current message survives."""
-        system = self._system_prompt()
+        exchanges first if needed. Guarantees the current message survives.
+
+        memories: optional list of Mem0 memory dicts to inject into the system
+        prompt (mem0 backend only). Ignored on flatfile path (memories=None).
+        """
+        memory_block = ""
+        if memories:
+            try:
+                from jack_memory.client import JackMemoryClient
+                memory_block = JackMemoryClient.format_for_prompt(memories)
+            except Exception:  # noqa: BLE001
+                pass
+        system = self._system_prompt(memory_block=memory_block)
         history = self.get_context(user_id)
         system_tokens = estimate_tokens(system)
         while history:
@@ -247,14 +280,15 @@ class JackConversationHandler:
 
     # -- memory ---------------------------------------------------------------
     def _memory_updater(self):
-        """Lazy singleton MemoryUpdater pointed at the same USER.md this handler
-        reads. Returns None if the package can't be imported (degrade silently)."""
+        """Lazy updater using backend factory (flatfile or mem0).
+
+        Returns None if the package can't be imported (degrade silently).
+        """
         if self._memory is None:
             try:
-                from jack_memory.updater import MemoryUpdater
-
-                self._memory = MemoryUpdater(user_path=self._user_path)
-            except Exception:  # noqa: BLE001 - memory is optional; never block chat
+                from jack_memory.backend import build_updater
+                self._memory = build_updater(self._user_path)
+            except Exception:  # noqa: BLE001 — memory is optional; never block chat
                 self._memory = False  # sentinel: import failed, don't retry endlessly
         return self._memory or None
 
@@ -275,12 +309,31 @@ class JackConversationHandler:
             return
 
     async def _answer_memory_query(self, user_message: str) -> str:
-        """Read USER.md FRESH from disk (not the cached profile) and ask Jack to
-        summarize it like a friend. Falls back to the error reply on failure."""
-        try:
-            memory = self._user_path.read_text(encoding="utf-8").strip()
-        except (OSError, UnicodeDecodeError):
-            memory = ""
+        """Summarize everything known about Arnav.
+
+        On mem0 backend: fetches from Qdrant via retriever.search (off-thread).
+        Falls back to reading USER.md fresh from disk on empty result or error.
+        On flatfile backend (retriever=None): reads USER.md directly.
+        """
+        memory = ""
+        if self._retriever is not None:
+            try:
+                all_memories = await asyncio.to_thread(
+                    self._retriever.search, "everything about Arnav", "arnav", 50
+                )
+                if all_memories:
+                    from jack_memory.client import JackMemoryClient
+                    memory = JackMemoryClient.format_for_prompt(all_memories)
+            except Exception:  # noqa: BLE001 — degrade to flatfile on any error
+                pass
+
+        if not memory:
+            # Flatfile fallback: read USER.md fresh from disk (not the cached profile)
+            try:
+                memory = self._user_path.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError):
+                memory = ""
+
         if not memory:
             return "I don't have anything in my memory about you yet."
         system = "\n\n".join(
@@ -299,7 +352,7 @@ class JackConversationHandler:
                 max_tokens=_REPLY_TOKENS,
             )
             reply = (reply or "").strip()
-        except Exception:  # noqa: BLE001 - degrade gracefully
+        except Exception:  # noqa: BLE001 — degrade gracefully
             return _ERROR_REPLY
         return reply or _ERROR_REPLY
 
@@ -312,7 +365,18 @@ class JackConversationHandler:
         if _MEMORY_QUERY_RE.search(user_message or ""):
             return await self._answer_memory_query(user_message)
 
-        system, user_block = self.build_prompt(user_message, user_id)
+        # Retrieve memory context off the event loop (blocking Qdrant search in thread).
+        # On flatfile backend, _retriever is None and this block is a no-op.
+        memories: list = []
+        if self._retriever is not None:
+            try:
+                memories = await asyncio.to_thread(
+                    self._retriever.search, user_message, user_id
+                )
+            except Exception:  # noqa: BLE001 — degrade gracefully, never block chat
+                pass
+
+        system, user_block = self.build_prompt(user_message, user_id, memories=memories)
         prefer, _ = _resolve_provider()
         try:
             from lib import llm  # lazy: keeps pure-logic paths importable in tests
@@ -325,7 +389,7 @@ class JackConversationHandler:
                 max_tokens=_REPLY_TOKENS,
             )
             reply = (reply or "").strip()
-        except Exception:  # noqa: BLE001 - degrade gracefully, never crash the gateway
+        except Exception:  # noqa: BLE001 — degrade gracefully, never crash the gateway
             return _ERROR_REPLY
         if not reply:
             return _ERROR_REPLY
