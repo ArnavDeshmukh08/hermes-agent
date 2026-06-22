@@ -190,11 +190,14 @@ class ProactiveScheduler:
         # Score candidates.
         from proactive.scorer import PriorityScorer  # noqa: PLC0415
         scorer = PriorityScorer()
+        # Shadow mode: bypass daily cap so all reasoning decisions are visible
+        # (nothing is actually sent, so the cap has no meaning in shadow mode).
         sent_today = 0
-        try:
-            sent_today = self._engine.sent_today_count(now=now)
-        except Exception:  # noqa: BLE001
-            pass
+        if mode != "shadow":
+            try:
+                sent_today = self._engine.sent_today_count(now=now)
+            except Exception:  # noqa: BLE001
+                pass
         selected = scorer.select(candidates, sent_today=sent_today)
 
         # Dedup: drop nudges sent recently.
