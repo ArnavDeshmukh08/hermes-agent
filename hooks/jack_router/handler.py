@@ -520,6 +520,46 @@ async def _run_goal(message, route) -> None:
         _log(f"goal failed: {e!r}")
 
 
+async def _run_health(message, route) -> None:  # noqa: ARG001
+    """Fetch today's Garmin data and post a chat-friendly summary — no agent loop.
+
+    Honest-failure policy: if the Mac service is unreachable (None return), we
+    say so clearly.  We NEVER fabricate data or describe a fictional setup process.
+    """
+    channel = message.channel
+    try:
+        try:
+            from integrations.garmin import GarminClient  # lazy import
+            from integrations.garmin_chat import format_garmin_for_chat  # lazy import
+        except ImportError as e:
+            await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
+            _log(f"health import failed: {e!r}")
+            return
+
+        async with _sem():
+            client = GarminClient()
+            summary = await asyncio.to_thread(client.get_daily_summary)
+
+        if summary is None:
+            await channel.send(
+                "I can't reach your Garmin data right now — the Mac service looks down. "
+                "Check if the Garmin service is running on your Mac (port 8765)."
+            )
+            return
+
+        formatted = format_garmin_for_chat(summary)
+        if not formatted:
+            await channel.send(
+                "I pulled your Garmin data but nothing came through — might be a sync delay."
+            )
+            return
+
+        await channel.send(f"Here's your Garmin data for today:\n{formatted}")
+    except Exception as e:  # noqa: BLE001 — never crash the gateway
+        await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
+        _log(f"health query failed: {e!r}")
+
+
 def _parse_config_request(text: str) -> dict | None:
     """Extract {key, value} from a config-change request using the LLM.
 
@@ -714,6 +754,9 @@ async def _dispatch(adapter, message, route) -> None:
         return
     if route.intent == "goal":
         _fire(_run_goal(message, route))
+        return
+    if route.intent == "health_query":
+        _fire(_run_health(message, route))
         return
     if route.intent == "proactive":
         if route.params.get("action") == "status":

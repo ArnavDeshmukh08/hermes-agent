@@ -179,6 +179,38 @@ _SELF_GENERIC_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Health / Garmin intents. Checked AFTER proactive and BEFORE goal intents.
+# Requires explicit health/device noun to avoid false positives.
+# ---------------------------------------------------------------------------
+_HEALTH_QUERY_RE = re.compile(
+    r"\b(?:"
+    # Sleep queries
+    r"how\s+did\s+i\s+sleep\b|"
+    r"my\s+sleep\s+score\b|"
+    r"how\s+was\s+my\s+sleep\b|"
+    r"sleep\s+(?:data|stats?|last\s+night)\b|"
+    r"analyze\s+my\s+sleep\b|"
+    # Steps / activity — require a time/count qualifier to avoid stealing "my steps goal"
+    r"my\s+steps\s+(?:today|so\s+far|this\s+week|count)\b|"
+    r"how\s+many\s+steps\s+today\b|"
+    r"how\s+active\s+was\s+i\b|"
+    r"my\s+workouts?\s+today\b|"
+    # Garmin-specific
+    r"my\s+garmin\b|"
+    r"garmin\s+(?:data|stats?)\b|"
+    r"(?:can\s+you\s+read|check|access)\s+my\s+garmin\b|"
+    # Metrics
+    r"body\s+battery\b|"
+    r"my\s+heart\s+rate\b|"
+    r"my\s+stress\s+(?:level|today)\b|"
+    r"calories\s+(?:today|burned)\b|"
+    # General health data
+    r"health\s+(?:data|stats?|metrics?)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
 # Goal intents. Checked AFTER calendar/reminder/self_config/proactive and
 # BEFORE the conversational fallthrough. Query first (read-only), then update
 # (mutating, needs an explicit verb), then create (broadest).
@@ -254,7 +286,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "goal" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "health_query" | "goal" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -305,6 +337,9 @@ def classify(text: str) -> Route | None:
         return Route("proactive", {"action": "status", "text": t})
     if _PROACTIVE_CONTROL_RE.search(t):
         return Route("proactive", {"action": "control", "control": _proactive_control_value(t), "text": t})
+    # Health / Garmin branch — after proactive intents, before goal intents.
+    if _HEALTH_QUERY_RE.search(t):
+        return Route("health_query", {"text": t})
     # Goal branch — after all other operational intents, before conversational.
     # Query checked first (read-only, harmless false-positive), then update
     # (requires explicit verb + "goal"), then create (broadest).

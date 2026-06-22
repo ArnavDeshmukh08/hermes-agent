@@ -107,13 +107,16 @@ class HistoryTest(unittest.TestCase):
 
 class PromptBudgetTest(unittest.TestCase):
     def test_prompt_stays_under_budget(self):
-        h = _handler(max_turns=20, token_budget=400)
+        # Budget must exceed the system prompt floor (~575 tokens with capabilities
+        # block) but stay well below system + all 20 turns (~4575 tokens), so the
+        # sliding-window trimmer is exercised and the budget assertion is meaningful.
+        h = _handler(max_turns=20, token_budget=800)
         for i in range(20):
             h.add_turn("u", "user", "x" * 400)  # ~100 tokens each
             h.add_turn("u", "assistant", "y" * 400)
         system, user_block = h.build_prompt("current question", "u")
         total = estimate_tokens(system) + estimate_tokens(user_block)
-        self.assertLessEqual(total, 400)
+        self.assertLessEqual(total, 800)
 
     def test_current_message_always_present(self):
         h = _handler(max_turns=20, token_budget=1)  # impossibly small

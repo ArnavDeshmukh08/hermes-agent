@@ -650,14 +650,17 @@ You are Jack, Chief of Staff for Arnav Deshmukh, a technical founder.
         self.assertEqual(len(ctx), 4)
 
     def test_prompt_stays_under_budget(self):
+        # Budget must exceed the system-prompt floor (~635 tokens with capabilities block)
+        # to leave room for at least the current message. We use 800 so the trimming
+        # logic fires (drops old history) and the assertion still validates it.
         from conversation import estimate_tokens
-        h = self._handler(max_turns=20, token_budget=400)
+        h = self._handler(max_turns=20, token_budget=800)
         for i in range(20):
             h.add_turn("u", "user", "x" * 400)
             h.add_turn("u", "assistant", "y" * 400)
         system, user_block = h.build_prompt("current question", "u")
         total = estimate_tokens(system) + estimate_tokens(user_block)
-        self.assertLessEqual(total, 400)
+        self.assertLessEqual(total, 800)
 
     def test_current_message_always_present(self):
         h = self._handler(max_turns=20, token_budget=1)
