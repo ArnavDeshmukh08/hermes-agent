@@ -38,8 +38,11 @@ class TestNormalizeNudgeType:
         assert normalize_nudge_type("GYM") == "gym"
 
     def test_unknown_type_lowercased_and_normalized(self):
-        assert normalize_nudge_type("Siddhi Check") == "siddhi_check"
-        assert normalize_nudge_type("Goal-Update") == "goal_update"
+        # siddhi_check and goal_update are in the canonical map now
+        assert normalize_nudge_type("Siddhi Check") == "relationship_followup"
+        assert normalize_nudge_type("Goal-Update") == "goal_nudge"
+        # truly unknown types pass through normalized
+        assert normalize_nudge_type("Random Thing") == "random_thing"
 
     def test_none_and_empty(self):
         assert normalize_nudge_type(None) == ""

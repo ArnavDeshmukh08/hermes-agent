@@ -41,11 +41,38 @@ _DEFAULT_LOG_RETENTION_DAYS = 7
 DEDUP_WINDOW_HOURS = int(os.environ.get("JACK_PROACTIVE_DEDUP_HOURS", "6"))
 
 _CANONICAL_NUDGE_MAP: dict[str, str] = {
+    # gym / workout variants
     "gym": "gym",
     "gym_session": "gym",
     "gym_reminder": "gym",
+    "gym_check": "gym",
     "workout": "gym",
     "workout_session": "gym",
+    "workout_reminder": "gym",
+    # relationship variants
+    "relationship": "relationship_followup",
+    "relationship_followup": "relationship_followup",
+    "relationship_check": "relationship_followup",
+    "siddhi_check": "relationship_followup",
+    "siddhi_followup": "relationship_followup",
+    # goal / work variants
+    "goal": "goal_nudge",
+    "goal_nudge": "goal_nudge",
+    "goal_update": "goal_nudge",
+    "stale_goal": "goal_nudge",
+    "vytal": "goal_nudge",
+    "stocksage": "goal_nudge",
+    # calendar variants
+    "calendar": "calendar_prep",
+    "calendar_prep": "calendar_prep",
+    "calendar_reminder": "calendar_prep",
+    "event_reminder": "calendar_prep",
+    # health variants
+    "health": "health_nudge",
+    "health_nudge": "health_nudge",
+    "health_reminder": "health_nudge",
+    "hydration": "health_nudge",
+    "sleep": "health_nudge",
 }
 
 

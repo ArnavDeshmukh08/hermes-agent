@@ -30,6 +30,14 @@ _MEMORY_SEARCH_LIMIT = 12
 _RAW_LOG_CHARS = 200
 _VALID_PRIORITIES = (P1, P2, P3)
 _logger = logging.getLogger("proactive.reasoner")
+# Kept outside the f-string in gather_context() to avoid double-brace escaping
+# errors and make the schema independently readable.
+_RESPONSE_SCHEMA_HINT = (
+    'Return ONLY a JSON object: {"nudges": [...]} where each nudge is '
+    '{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}. '
+    'The "reasoning" must name which domain (1-5) triggered the nudge and why it is timely. '
+    'If nothing qualifies, return {"nudges": []}.'
+)
 
 _SYSTEM_PROMPT = (
     "You are Jack — Arnav's AI chief of staff. You know everything about him from his memory, "
@@ -71,8 +79,8 @@ def gather_context(
                         memories.append(text)
                         if len(memories) >= _MAX_MEMORIES:
                             break
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("gather_context: memory query %r failed: %s: %s", query, type(exc).__name__, exc)
             if len(memories) >= _MAX_MEMORIES:
                 break
     except Exception as exc:
@@ -157,7 +165,7 @@ Priority mapping:
 - P2 = important and actionable right now.
 - P3 = light, optional, nice-to-know.
 
-Return ONLY a JSON object: {{"nudges": [...]}} where each nudge is {{"priority": "P1"|"P2"|"P3", "message": str, "nudge_type": str, "alone": bool, "reasoning": str}}. The "reasoning" must name which domain (1-5) triggered the nudge and why it is timely. If nothing qualifies, return {{"nudges": []}}."""
+{_RESPONSE_SCHEMA_HINT}"""
 
     return context_str
 
