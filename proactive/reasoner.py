@@ -49,6 +49,28 @@ _RESPONSE_SCHEMA_HINT = (
     'If nothing qualifies, return {"nudges": []}.'
 )
 
+# Keyword → canonical nudge_type. Used as a fallback when the LLM returns
+# a generic type like "reminder" or "notification" — inferred from message content.
+_KEYWORD_TO_CANONICAL: dict[str, str] = {
+    "gym": "gym",
+    "workout": "gym",
+    "exercise": "gym",
+    "fitness": "gym",
+    "siddhi": "relationship_followup",
+    "relationship": "relationship_followup",
+    "vytal": "goal_nudge",
+    "stocksage": "goal_nudge",
+    "masters": "goal_nudge",
+    "goal": "goal_nudge",
+    "deadline": "goal_nudge",
+    "project": "goal_nudge",
+    "sleep": "health_nudge",
+    "hydration": "health_nudge",
+    "water": "health_nudge",
+    "health": "health_nudge",
+}
+_GENERIC_NUDGE_TYPES = frozenset({"reminder", "notification", "alert", "nudge", "update", "general"})
+
 _SYSTEM_PROMPT = (
     "You are Jack — Arnav's AI chief of staff. You know everything about him from his memory, "
     "calendar, and reminders. Your job each cycle: methodically check every life domain "
@@ -166,7 +188,8 @@ def gather_context(
 # What I remember about Arnav
 {mem_lines}
 
-# Calendar today
+# Calendar — events starting within the next 2 hours ONLY
+# (events further away have been removed; do NOT surface anything from memory that is not listed here)
 {cal}
 
 # Pending reminders
@@ -308,8 +331,19 @@ class ProactiveReasoner:
         if not isinstance(reasoning, str):
             reasoning = ""
 
+        # When the LLM returns a generic type ("reminder", "notification", etc.),
+        # infer the canonical domain type from message + reasoning keywords.
+        resolved_type = nudge_type.strip().lower()
+        if resolved_type in _GENERIC_NUDGE_TYPES:
+            search_text = (message + " " + reasoning).lower()
+            for keyword, canonical in _KEYWORD_TO_CANONICAL.items():
+                if keyword in search_text:
+                    resolved_type = canonical
+                    _logger.debug("nudge_type %r inferred as %r from message", nudge_type, resolved_type)
+                    break
+
         return ProactiveItem(
-            nudge_type=nudge_type.strip(),
+            nudge_type=resolved_type,
             priority=priority,
             score=score,
             message=message.strip(),
