@@ -18,6 +18,7 @@ for _p in (str(_ROOT), str(_ROUTER_DIR)):
 
 import jack_intent_router as router  # noqa: E402
 from integrations.garmin_chat import (  # noqa: E402
+    classify_health_query,
     format_garmin_for_chat,
     format_sleep,
     format_stats,
@@ -177,17 +178,21 @@ class TestRunHealthMacDown(unittest.TestCase):
         return message
 
     def test_honest_failure_message_when_garmin_returns_none(self):
-        """When get_daily_summary returns None, we report honest failure — no fabricated data."""
+        """When get_daily_summary returns None (general query), we report honest failure.
+
+        Uses "my garmin" which routes to the 'full' path (get_daily_summary), NOT
+        the sleep path. Sleep-specific Mac-down is covered by TestSleepFallbackToYesterday.
+        """
         import handler as h  # imported after sys.path is set up
 
         message = self._make_message()
-        route = router.Route("health_query", {"text": "how did I sleep"})
+        # "my garmin" → classify_health_query → "full" → get_daily_summary
+        route = router.Route("health_query", {"text": "my garmin"})
 
         mock_client = MagicMock()
         mock_client.get_daily_summary.return_value = None
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
-             patch("integrations.garmin_chat.format_garmin_for_chat", return_value=""):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
             _run_async(h._run_health(message, route))
 
         call_args = message.channel.send.call_args[0][0]
@@ -237,6 +242,174 @@ class TestRunHealthRealData(unittest.TestCase):
         sent = message.channel.send.call_args[0][0]
         self.assertIn("7.5", sent)
         self.assertIn("9,000", sent)
+
+
+# ---------------------------------------------------------------------------
+# 8. classify_health_query — routes to correct data path
+# ---------------------------------------------------------------------------
+
+class TestClassifyHealthQuery(unittest.TestCase):
+    def test_sleep_phrases_classified_as_sleep(self):
+        for phrase in [
+            "how did I sleep",
+            "my sleep score",
+            "how was my sleep",
+            "sleep data",
+            "analyze my sleep",
+            "last night's sleep",
+        ]:
+            self.assertEqual(classify_health_query(phrase), "sleep", f"Expected 'sleep' for: {phrase!r}")
+
+    def test_stats_phrases_classified_as_stats(self):
+        for phrase in [
+            "how many steps today",
+            "my steps today",
+            "body battery",
+            "my heart rate",
+            "my stress level",
+            "calories today",
+            "how active was I",
+        ]:
+            self.assertEqual(classify_health_query(phrase), "stats", f"Expected 'stats' for: {phrase!r}")
+
+    def test_general_phrases_classified_as_full(self):
+        for phrase in [
+            "my garmin",
+            "garmin data",
+            "garmin stats",
+            "health data",
+        ]:
+            self.assertEqual(classify_health_query(phrase), "full", f"Expected 'full' for: {phrase!r}")
+
+    def test_empty_string_returns_full(self):
+        self.assertEqual(classify_health_query(""), "full")
+
+
+# ---------------------------------------------------------------------------
+# 9. Sleep fallback to yesterday when today is empty
+# ---------------------------------------------------------------------------
+
+class TestSleepFallbackToYesterday(unittest.TestCase):
+    def _make_message(self):
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        message = MagicMock()
+        message.channel = channel
+        return message
+
+    def test_falls_back_to_yesterday_when_today_empty(self):
+        import handler as h
+
+        message = self._make_message()
+        route = router.Route("health_query", {"text": "how did I sleep"})
+
+        yesterday_sleep = {"total_sleep_h": 7.0, "deep_h": 1.5, "rem_h": 1.2, "score": 72}
+
+        mock_client = MagicMock()
+        # First call (today) returns None, second call (yesterday) returns data
+        mock_client.last_night_sleep.side_effect = [None, yesterday_sleep]
+
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+            asyncio.run(h._run_health(message, route))
+
+        sent = message.channel.send.call_args[0][0]
+        self.assertIn("7.0", sent)
+        # Should mention "night of" since we fell back
+        self.assertIn("night of", sent.lower())
+
+    def test_honest_message_when_both_dates_empty(self):
+        import handler as h
+
+        message = self._make_message()
+        route = router.Route("health_query", {"text": "how did I sleep"})
+
+        mock_client = MagicMock()
+        mock_client.last_night_sleep.return_value = None  # both today and yesterday empty
+
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+            asyncio.run(h._run_health(message, route))
+
+        sent = message.channel.send.call_args[0][0].lower()
+        # Must use honest language, no fabrication
+        self.assertTrue(
+            "no sleep data" in sent or "not synced" in sent or "sync" in sent,
+            f"Expected honest sync message, got: {sent!r}",
+        )
+        # Must NOT fabricate setup steps
+        for word in ("api key", "fitbit", "plugin", "connector", "setup"):
+            self.assertNotIn(word, sent)
+
+
+# ---------------------------------------------------------------------------
+# 10. Steps query returns the actual number
+# ---------------------------------------------------------------------------
+
+class TestStepsQueryReturnsNumber(unittest.TestCase):
+    def _make_message(self):
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        message = MagicMock()
+        message.channel = channel
+        return message
+
+    def test_steps_query_returns_count(self):
+        import handler as h
+
+        message = self._make_message()
+        route = router.Route("health_query", {"text": "how many steps today"})
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"steps": 43, "calories": 120}
+
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+            asyncio.run(h._run_health(message, route))
+
+        sent = message.channel.send.call_args[0][0]
+        # Must contain the actual step count
+        self.assertIn("43", sent)
+        # Must NOT tell Arnav to rephrase
+        self.assertNotIn("just ask", sent.lower())
+        self.assertNotIn("try asking", sent.lower())
+
+    def test_sleep_question_calls_last_night_sleep_not_get_daily_summary(self):
+        """Sleep queries use last_night_sleep(), not get_daily_summary()."""
+        import handler as h
+
+        message = self._make_message()
+        route = router.Route("health_query", {"text": "how did I sleep"})
+
+        sleep_data = {"total_sleep_h": 8.0, "deep_h": 2.0, "rem_h": 1.5, "score": 80}
+        mock_client = MagicMock()
+        mock_client.last_night_sleep.return_value = sleep_data
+
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+            asyncio.run(h._run_health(message, route))
+
+        # last_night_sleep was called, get_daily_summary was NOT
+        mock_client.last_night_sleep.assert_called()
+        mock_client.get_daily_summary.assert_not_called()
+
+        sent = message.channel.send.call_args[0][0]
+        self.assertIn("8.0", sent)
+
+    def test_stats_question_calls_get_stats_not_get_daily_summary(self):
+        """Stats queries use get_stats(), not get_daily_summary()."""
+        import handler as h
+
+        message = self._make_message()
+        route = router.Route("health_query", {"text": "my steps today"})
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"steps": 1234, "body_battery_high": 90}
+
+        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+            asyncio.run(h._run_health(message, route))
+
+        mock_client.get_stats.assert_called()
+        mock_client.get_daily_summary.assert_not_called()
+
+        sent = message.channel.send.call_args[0][0]
+        self.assertIn("1,234", sent)
 
 
 if __name__ == "__main__":

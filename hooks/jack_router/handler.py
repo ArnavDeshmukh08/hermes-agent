@@ -520,24 +520,87 @@ async def _run_goal(message, route) -> None:
         _log(f"goal failed: {e!r}")
 
 
-async def _run_health(message, route) -> None:  # noqa: ARG001
-    """Fetch today's Garmin data and post a chat-friendly summary — no agent loop.
+async def _run_health(message, route) -> None:
+    """Fetch Garmin data and post a chat-friendly summary — no agent loop.
 
-    Honest-failure policy: if the Mac service is unreachable (None return), we
-    say so clearly.  We NEVER fabricate data or describe a fictional setup process.
+    Routes by query type:
+      sleep  — last_night_sleep(), falls back to yesterday if today is empty
+      stats  — get_stats() for steps/calories/stress/body battery
+      full   — get_daily_summary() with sleep fallback
+
+    Honest-failure policy: if the Mac service is unreachable or returns nothing,
+    we say so clearly.  We NEVER fabricate data or invent a fictional setup.
     """
+    import datetime as _dt
+
     channel = message.channel
+    text = route.params.get("text", "")
     try:
         try:
             from integrations.garmin import GarminClient  # lazy import
-            from integrations.garmin_chat import format_garmin_for_chat  # lazy import
+            from integrations.garmin_chat import (  # lazy import
+                classify_health_query,
+                format_garmin_for_chat,
+                format_sleep,
+                format_stats,
+            )
         except ImportError as e:
             await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
             _log(f"health import failed: {e!r}")
             return
 
+        client = GarminClient()
+        query_type = classify_health_query(text)
+
+        # ── sleep path ────────────────────────────────────────────────────────
+        if query_type == "sleep":
+            date_label = "last night"
+            async with _sem():
+                sleep = await asyncio.to_thread(client.last_night_sleep)
+                if sleep is None:
+                    # Sleep data is filed under the wake-up date; at 1 am that's
+                    # today, but if Garmin hasn't synced yet try yesterday's night.
+                    _IST_TZ = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+                    yesterday = (
+                        _dt.datetime.now(tz=_IST_TZ) - _dt.timedelta(days=1)
+                    ).date().isoformat()
+                    sleep = await asyncio.to_thread(client.last_night_sleep, yesterday)
+                    if sleep is not None:
+                        date_label = f"night of {yesterday}"
+
+            if sleep is None:
+                await channel.send(
+                    "No sleep data synced yet — Garmin usually updates within "
+                    "30 minutes of waking up."
+                )
+                return
+
+            detail = format_sleep(sleep).removeprefix("Sleep: ")
+            await channel.send(f"Sleep ({date_label}):\n{detail}")
+            return
+
+        # ── stats / activity path ─────────────────────────────────────────────
+        if query_type == "stats":
+            async with _sem():
+                stats = await asyncio.to_thread(client.get_stats)
+
+            if stats is None:
+                await channel.send(
+                    "I can't reach your Garmin data right now — the Mac service looks down. "
+                    "Check if the Garmin service is running on your Mac (port 8765)."
+                )
+                return
+
+            lines = format_stats(stats)
+            if not lines:
+                await channel.send("No activity data for today yet — check back after your first sync.")
+                return
+
+            await channel.send("Here's your activity data for today:\n" + "\n".join(lines))
+            return
+
+        # ── full / general path ───────────────────────────────────────────────
         async with _sem():
-            client = GarminClient()
             summary = await asyncio.to_thread(client.get_daily_summary)
 
         if summary is None:
@@ -547,6 +610,19 @@ async def _run_health(message, route) -> None:  # noqa: ARG001
             )
             return
 
+        # If sleep is missing from the summary, try yesterday's night.
+        raw_sleep = summary.get("sleep")
+        if raw_sleep is None or (isinstance(raw_sleep, dict) and raw_sleep.get("error") == "no_data"):
+            _IST_TZ = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+            yesterday = (
+                _dt.datetime.now(tz=_IST_TZ) - _dt.timedelta(days=1)
+            ).date().isoformat()
+            async with _sem():
+                yesterday_sleep = await asyncio.to_thread(client.last_night_sleep, yesterday)
+            if yesterday_sleep:
+                summary = dict(summary)
+                summary["sleep"] = yesterday_sleep
+
         formatted = format_garmin_for_chat(summary)
         if not formatted:
             await channel.send(
@@ -555,6 +631,7 @@ async def _run_health(message, route) -> None:  # noqa: ARG001
             return
 
         await channel.send(f"Here's your Garmin data for today:\n{formatted}")
+
     except Exception as e:  # noqa: BLE001 — never crash the gateway
         await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
         _log(f"health query failed: {e!r}")
