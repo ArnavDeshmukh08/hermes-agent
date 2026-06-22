@@ -19,6 +19,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +39,24 @@ _DEFAULT_LOG_PATH = Path.home() / ".hermes" / "proactive_log.json"
 _DEFAULT_LOG_RETENTION_DAYS = 7
 
 DEDUP_WINDOW_HOURS = int(os.environ.get("JACK_PROACTIVE_DEDUP_HOURS", "6"))
+
+_CANONICAL_NUDGE_MAP: dict[str, str] = {
+    "gym": "gym",
+    "gym_session": "gym",
+    "gym_reminder": "gym",
+    "workout": "gym",
+    "workout_session": "gym",
+}
+
+
+def normalize_nudge_type(nudge_type: str | None) -> str:
+    """Canonicalize a free-form nudge_type for dedup comparison."""
+    if not nudge_type:
+        return ""
+    key = nudge_type.strip().lower()
+    key = re.sub(r"[\s\-]+", "_", key)
+    key = re.sub(r"_+", "_", key).strip("_")
+    return _CANONICAL_NUDGE_MAP.get(key, key)
 
 
 def _to_z(dt: datetime) -> str:
@@ -208,7 +227,7 @@ class ProactiveEngine:
             now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=window_hours)
         for entry in self._read_log():
-            if entry.get("nudge_type") != nudge_type:
+            if normalize_nudge_type(entry.get("nudge_type")) != normalize_nudge_type(nudge_type):
                 continue
             try:
                 sent_at = _from_z(entry["sent_at"])
@@ -240,7 +259,8 @@ class ProactiveEngine:
         entries = self._read_log()
         entries.append(
             {
-                "nudge_type": item.nudge_type,
+                "nudge_type": normalize_nudge_type(item.nudge_type),
+                "raw_nudge_type": item.nudge_type,
                 "priority": item.priority,
                 "sent_at": _to_z(now),
                 "message": item.message,

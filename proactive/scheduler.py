@@ -236,6 +236,13 @@ class ProactiveScheduler:
                 )
             except Exception as exc:
                 self._logger(f"shadow log failed: {type(exc).__name__}: {exc}")
+            # Persist shadow 'sends' to proactive_log.json so dedup has history on
+            # subsequent cycles. Without this the log stays empty and dedup never fires.
+            for it in kept_final:
+                try:
+                    self._engine.log_sent(it, now=now)
+                except Exception as exc:
+                    self._logger(f"shadow log_sent failed: {type(exc).__name__}: {exc}")
             self._logger(f"proactive cycle (reasoner/shadow) would_send={len(kept_final)}")
             _drain_memory_queue_if_needed()
             return len(kept_final)
