@@ -48,19 +48,6 @@ _LIVE_TASKS: set = set()
 _SEM = None  # lazy, created on the running loop
 
 
-def _voice(intent: str, data: dict, user_message: str, fallback_plain: str) -> str:
-    """Route a successful data response through Jack's personality layer.
-
-    Falls back to fallback_plain on any import failure or compose error —
-    so handlers can always call this safely even if jack_voice isn't installed yet.
-    """
-    try:
-        from jack_voice.compose import compose_reply  # noqa: PLC0415 — lazy
-        return compose_reply(intent, data, user_message, fallback_plain)
-    except Exception:  # noqa: BLE001
-        return fallback_plain
-
-
 def _log(msg: str) -> None:
     print(f"[jack_router] {msg}", flush=True)
 
@@ -198,7 +185,13 @@ def _voice(intent: str, data: dict, user_message: str, fallback_plain: str) -> s
 
     Imports jack_voice.compose lazily so handler tests can mock it easily.
     Returns fallback_plain if compose is unavailable or raises.
+
+    In test mode (HERMES_LLM_MOCK=1) the layer is bypassed so existing handler
+    tests continue to assert against deterministic fallback strings rather than
+    mock LLM output.  The compose layer has its own test suite.
     """
+    if str(os.environ.get("HERMES_LLM_MOCK", "")).strip().lower() in {"1", "true", "yes"}:
+        return fallback_plain
     try:
         from jack_voice.compose import compose_reply  # noqa: PLC0415
         return compose_reply(intent, data, user_message, fallback_plain)
@@ -285,7 +278,18 @@ async def _run_reminder(message, route) -> None:
                 f"• {r['message']} — {_fmt_ist(r['fire_at'])}" + (" · recurring" if r.get("recurring") else "")
                 for r in items
             ]
-            await channel.send("⏰ Your reminders:\n" + "\n".join(lines))
+            fallback_plain = "⏰ Your reminders:\n" + "\n".join(lines)
+            data = {
+                "reminders": [
+                    {
+                        "message": r["message"],
+                        "fire_at_ist": _fmt_ist(r["fire_at"]),
+                        "recurring": bool(r.get("recurring")),
+                    }
+                    for r in items
+                ]
+            }
+            await channel.send(_voice("reminder_list", data, text, fallback_plain))
             return
         if action == "cancel":
             items = await asyncio.to_thread(_store().list_pending, user_id)
@@ -294,7 +298,12 @@ async def _run_reminder(message, route) -> None:
                 await channel.send("Which one? Try `what reminders do I have`, then `cancel the <name> reminder`.")
                 return
             ok = await asyncio.to_thread(_store().cancel, target["id"], user_id)
-            await channel.send(f"🗑️ Cancelled: {target['message']}" if ok else "Couldn't cancel that one.")
+            if ok:
+                fallback_plain = f"🗑️ Cancelled: {target['message']}"
+                data = {"cancelled_message": target["message"]}
+                await channel.send(_voice("reminder_cancel", data, text, fallback_plain))
+            else:
+                await channel.send("Couldn't cancel that one.")
             return
         # set
         from reminders import parser as rparser
@@ -307,7 +316,9 @@ async def _run_reminder(message, route) -> None:
             return
         await asyncio.to_thread(_store().add, user_id, msg, parsed.fire_at, parsed.recurring)
         suffix = " · recurring" if parsed.recurring else ""
-        await channel.send(f"Got it ⏰ I'll remind you to {msg} at {_fmt_ist(parsed.fire_at)}{suffix}")
+        fallback_plain = f"Got it ⏰ I'll remind you to {msg} at {_fmt_ist(parsed.fire_at)}{suffix}"
+        data = {"message": msg, "fire_at_ist": _fmt_ist(parsed.fire_at), "recurring": bool(parsed.recurring)}
+        await channel.send(_voice("reminder_set", data, text, fallback_plain))
     except Exception as e:  # noqa: BLE001 - never crash the gateway on a reminder
         await channel.send("⚠️ Reminder system hiccup — try that again?")
         _log(f"reminder failed: {e!r}")
@@ -340,7 +351,8 @@ async def _run_calendar(message, route) -> None:
                     await channel.send("📅 Nothing on the calendar today.")
                     return
                 summary = await asyncio.to_thread(client.events_summary_text)
-                await channel.send(f"📅 Today's calendar:\n{summary}")
+                fallback = f"📅 Today's calendar:\n{summary}"
+                await channel.send(_voice("calendar_list", {"events_summary": summary}, text, fallback))
                 return
 
             # action == "add"
@@ -382,7 +394,8 @@ async def _run_calendar(message, route) -> None:
                 return
 
             when_str = start_ist.strftime("%a %b %-d at %-I:%M %p IST")
-            await channel.send(f"Added ✅ {result['summary']} — {when_str}")
+            fallback = f"Added ✅ {result['summary']} — {when_str}"
+            await channel.send(_voice("calendar_add", {"event_title": result["summary"], "when_ist": when_str}, text, fallback))
     except Exception as e:  # noqa: BLE001 — never crash the gateway on a calendar error
         await channel.send("📅 Calendar glitch — try that again?")
         _log(f"calendar failed: {e!r}")
@@ -538,14 +551,30 @@ async def _run_goal(message, route) -> None:
             await asyncio.to_thread(
                 _goal_store().append_progress, target_goal.id, updates["progress_note"]
             )
-            await channel.send(f"Logged against {target_goal.title}. Keeping count.")
+            fallback = f"Logged against {target_goal.title}. Keeping count."
+            await channel.send(
+                _voice(
+                    "goal_update_progress",
+                    {"goal_title": target_goal.title, "note": updates["progress_note"]},
+                    text,
+                    fallback,
+                )
+            )
             return
         new_status = updates.get("status")
         if new_status in ("done", "paused", "active"):
             await asyncio.to_thread(_goal_store().set_status, target_goal.id, new_status)
             verb = {"done": "marked complete", "paused": "paused", "active": "back on"}[new_status]
             tail = " Nice work." if new_status == "done" else ""
-            await channel.send(f"Done — {target_goal.title} {verb}.{tail}")
+            fallback = f"Done — {target_goal.title} {verb}.{tail}"
+            await channel.send(
+                _voice(
+                    "goal_update_status",
+                    {"goal_title": target_goal.title, "new_status": new_status, "verb": verb},
+                    text,
+                    fallback,
+                )
+            )
             return
         await channel.send(
             f"Got the goal ({target_goal.title}) but not sure what to change — "
@@ -737,11 +766,14 @@ async def _run_self_config(message, route) -> None:
         if action == "status":
             try:
                 st = await asyncio.to_thread(c.get_status)
-                if all(v == "active" for v in st.values()):
-                    await channel.send("All systems running ✅")
+                all_active = all(v == "active" for v in st.values())
+                if all_active:
+                    fallback = "All systems running ✅"
+                    await channel.send(_voice("self_config_status", {"all_active": True, "services": {}}, text, fallback))
                 else:
                     lines = [f"• {svc}: {state}" for svc, state in sorted(st.items())]
-                    await channel.send("System status:\n" + "\n".join(lines))
+                    fallback = "System status:\n" + "\n".join(lines)
+                    await channel.send(_voice("self_config_status", {"all_active": False, "services": dict(sorted(st.items()))}, text, fallback))
             except Exception as e:  # noqa: BLE001
                 await channel.send("⚠️ Couldn't check system status right now — try again shortly.")
                 _log(f"self_config status failed: {e!r}")
@@ -751,12 +783,15 @@ async def _run_self_config(message, route) -> None:
             try:
                 items = await asyncio.to_thread(c.list_configurable)
                 parts = []
+                settings_data = []
                 for item in items:
                     friendly = item["friendly"] or item["key"]
                     val = item["value"] if item["value"] is not None else "not set"
                     desc = item["description"]
                     parts.append(f"• {friendly} (currently {val}) — {desc}")
-                await channel.send("Here's what I can configure:\n" + "\n".join(parts))
+                    settings_data.append({"friendly": friendly, "value": val, "description": desc})
+                fallback = "Here's what I can configure:\n" + "\n".join(parts)
+                await channel.send(_voice("self_config_list", {"settings": settings_data}, text, fallback))
             except Exception as e:  # noqa: BLE001
                 await channel.send("⚠️ Couldn't fetch settings — try again shortly.")
                 _log(f"self_config list failed: {e!r}")
@@ -783,9 +818,11 @@ async def _run_self_config(message, route) -> None:
             return
 
         if result["success"]:
-            await channel.send("✅ Done — " + result["message"])
+            fallback = "✅ Done — " + result["message"]
+            await channel.send(_voice("self_config_set", {"key": parsed["key"], "success": True, "message": result["message"]}, text, fallback))
         else:
-            await channel.send("❌ Couldn't update that — " + result["message"])
+            fallback = "❌ Couldn't update that — " + result["message"]
+            await channel.send(_voice("self_config_set", {"key": parsed["key"], "success": False, "message": result["message"]}, text, fallback))
 
     except Exception:  # noqa: BLE001
         await channel.send("⚠️ Self-config glitch — try that again?")

@@ -236,7 +236,10 @@ class TestHandlerSelfConfigStatus(unittest.TestCase):
         msg = _make_message("are you running okay?")
         route = router.Route("self_config", {"action": "status", "text": "are you running okay?"})
         mock_c = _fake_self_config(get_status=get_status_dict)
-        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c):
+        # Patch _voice to return fallback_plain so these tests validate routing logic,
+        # not the personality layer output.
+        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             _run(handler._run_self_config(msg, route))
         return msg.channel.sent
 
@@ -268,7 +271,10 @@ class TestHandlerSelfConfigList(unittest.TestCase):
         msg = _make_message("what can I configure")
         route = router.Route("self_config", {"action": "list", "text": "what can I configure"})
         mock_c = _fake_self_config()
-        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c):
+        # Patch _voice to return fallback_plain so this test validates routing logic,
+        # not the personality layer output.
+        with patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             _run(handler._run_self_config(msg, route))
         combined = " ".join(msg.channel.sent)
         self.assertIn("briefing_time", combined)
@@ -278,6 +284,8 @@ class TestHandlerSelfConfigList(unittest.TestCase):
 
 class TestHandlerSelfConfigSet(unittest.TestCase):
     def test_set_success_sends_done_checkmark(self):
+        # Patch _voice to return fallback_plain so this test validates routing logic,
+        # not the personality layer output.
         msg = _make_message("change my briefing time to 8am")
         route = router.Route("self_config", {"action": "set", "text": "change my briefing time to 8am"})
         mock_c = _fake_self_config(set_result={"success": True, "message": "Updated JACK_BRIEFING_TIME_IST to 08:00."})
@@ -285,6 +293,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         with (
             patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=parsed_val),
+            patch("handler._voice", side_effect=lambda i, d, u, f: f),
         ):
             _run(handler._run_self_config(msg, route))
         combined = " ".join(msg.channel.sent)
@@ -292,7 +301,11 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         self.assertIn("Done", combined)
 
     def test_set_failure_no_done_no_checkmark(self):
-        """CRITICAL: when result["success"] is False, must NOT say Done or ✅."""
+        """CRITICAL: when result["success"] is False, must NOT say Done or ✅.
+
+        The failure path is not routed through _voice (it stays direct), so no
+        patch needed here — but we add it for consistency and future-proofing.
+        """
         msg = _make_message("change briefing to 25:00")
         route = router.Route("self_config", {"action": "set", "text": "change briefing to 25:00"})
         mock_c = _fake_self_config(set_result={"success": False, "message": "'25:00' is not a valid time."})
@@ -300,6 +313,7 @@ class TestHandlerSelfConfigSet(unittest.TestCase):
         with (
             patch("jack_tools.self_config.JackSelfConfig", return_value=mock_c),
             patch("handler._parse_config_request", return_value=parsed_val),
+            patch("handler._voice", side_effect=lambda i, d, u, f: f),
         ):
             _run(handler._run_self_config(msg, route))
         combined = " ".join(msg.channel.sent)
