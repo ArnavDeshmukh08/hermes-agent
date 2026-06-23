@@ -48,6 +48,19 @@ _LIVE_TASKS: set = set()
 _SEM = None  # lazy, created on the running loop
 
 
+def _voice(intent: str, data: dict, user_message: str, fallback_plain: str) -> str:
+    """Route a successful data response through Jack's personality layer.
+
+    Falls back to fallback_plain on any import failure or compose error —
+    so handlers can always call this safely even if jack_voice isn't installed yet.
+    """
+    try:
+        from jack_voice.compose import compose_reply  # noqa: PLC0415 — lazy
+        return compose_reply(intent, data, user_message, fallback_plain)
+    except Exception:  # noqa: BLE001
+        return fallback_plain
+
+
 def _log(msg: str) -> None:
     print(f"[jack_router] {msg}", flush=True)
 
@@ -178,6 +191,20 @@ def _goal_store():
 
         _GOAL_STORE = GoalStore()
     return _GOAL_STORE
+
+
+def _voice(intent: str, data: dict, user_message: str, fallback_plain: str) -> str:
+    """Route a successful structured reply through Jack's personality layer.
+
+    Imports jack_voice.compose lazily so handler tests can mock it easily.
+    Returns fallback_plain if compose is unavailable or raises.
+    """
+    try:
+        from jack_voice.compose import compose_reply  # noqa: PLC0415
+        return compose_reply(intent, data, user_message, fallback_plain)
+    except Exception as e:  # noqa: BLE001
+        _log(f"_voice fallback ({intent}): {e!r}")
+        return fallback_plain
 
 
 def _fmt_ist(value) -> str:
@@ -448,7 +475,8 @@ async def _run_goal(message, route) -> None:
                 fields.get("deadline"),
             )
             confirmation = confirm_create_message(goal.to_dict())
-            await channel.send(confirmation)
+            voiced = _voice("goal_create", {"goal": goal.to_dict()}, text, confirmation)
+            await channel.send(voiced)
             _log(f"goal created: {goal.id} — {goal.title}")
             return
 
@@ -478,7 +506,15 @@ async def _run_goal(message, route) -> None:
                 f"You've got {count} active goal" + ("s" if count != 1 else "")
                 + ". Reflecting back what you set:"
             )
-            await channel.send(header + "\n" + "\n".join(lines))
+            fallback = header + "\n" + "\n".join(lines)
+            goals_data = [
+                {"title": g.title, "deadline": g.deadline, "progress": extra}
+                for g, extra in zip(
+                    goals if target_goal is None else [target_goal],
+                    [line.split(" — ", 1)[1] if " — " in line else "" for line in lines],
+                )
+            ]
+            await channel.send(_voice("goal_query", {"goals": goals_data, "count": count}, text, fallback))
             return
 
         # action == "update"
@@ -576,7 +612,8 @@ async def _run_health(message, route) -> None:
                 return
 
             detail = format_sleep(sleep).removeprefix("Sleep: ")
-            await channel.send(f"Sleep ({date_label}):\n{detail}")
+            fallback = f"Sleep ({date_label}):\n{detail}"
+            await channel.send(_voice("health_sleep", {"date_label": date_label, "sleep": sleep}, text, fallback))
             return
 
         # ── stats / activity path ─────────────────────────────────────────────
@@ -596,7 +633,8 @@ async def _run_health(message, route) -> None:
                 await channel.send("No activity data for today yet — check back after your first sync.")
                 return
 
-            await channel.send("Here's your activity data for today:\n" + "\n".join(lines))
+            fallback = "Here's your activity data for today:\n" + "\n".join(lines)
+            await channel.send(_voice("health_stats", {"stats": stats}, text, fallback))
             return
 
         # ── full / general path ───────────────────────────────────────────────
@@ -630,7 +668,8 @@ async def _run_health(message, route) -> None:
             )
             return
 
-        await channel.send(f"Here's your Garmin data for today:\n{formatted}")
+        fallback = f"Here's your Garmin data for today:\n{formatted}"
+        await channel.send(_voice("health_full", {"summary": summary}, text, fallback))
 
     except Exception as e:  # noqa: BLE001 — never crash the gateway
         await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
