@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import date
 
 _logger = logging.getLogger("jack_goals.intents")
 
@@ -76,34 +77,86 @@ def _minimal_goal(text: str) -> dict:
 # ---------------------------------------------------------------------------
 # System prompt for goal creation
 # ---------------------------------------------------------------------------
-_CREATE_SYSTEM = (
-    "You convert a person's goal statement into JSON. Extract EXACTLY these fields:\n"
-    '  "title": short label (<=60 chars), e.g. "Run a marathon"\n'
-    '  "type": one of fitness, financial, project, habit, other\n'
-    '  "target": what success concretely looks like, e.g. "finish a full marathon"\n'
-    '  "plan": the person\'s OWN stated plan, verbatim-ish; "" if none given\n'
-    '  "metric": one of garmin_steps, garmin_runs, calendar, manual, none\n'
-    '  "deadline": ISO date (YYYY-MM-DD) or natural text like "in 10 weeks", else null\n'
-    "metric rules: fitness+steps->garmin_steps; fitness+running/marathon/5k/10k->garmin_runs;\n"
-    "  recurring sessions/classes->calendar; everything else->manual.\n"
-    "Return ONLY the JSON object. Do not invent a plan the person did not state."
-)
+
+def _create_system(today_str: str) -> str:
+    """Build the goal-parsing system prompt with today's date injected.
+
+    The date is critical: without it the LLM defaults to a stale/wrong year
+    when the user gives a partial date like "2nd August".
+    """
+    return (
+        f"Today is {today_str}.\n"
+        "You convert a person's goal statement into JSON. Extract EXACTLY these fields:\n"
+        '  "title": short label (<=60 chars), e.g. "Run a marathon"\n'
+        '  "type": one of fitness, financial, project, habit, other\n'
+        '  "target": what success concretely looks like, e.g. "finish a full marathon"\n'
+        '  "plan": the person\'s OWN stated plan, verbatim-ish; "" if none given\n'
+        '  "metric": one of garmin_steps, garmin_runs, calendar, manual, none\n'
+        '  "deadline": ISO date (YYYY-MM-DD) or natural text like "in 10 weeks", else null\n'
+        "deadline rules: resolve partial/relative dates to the NEXT FUTURE occurrence.\n"
+        f"  '2nd August' with no year → the next 2nd August that is in the future from {today_str}.\n"
+        "  Never produce a deadline in the past. If only month+day are given, use the\n"
+        "  current year if that date is still in the future; otherwise use next year.\n"
+        "  If a full explicit year is stated (e.g. 'August 2 2027'), preserve it as-is.\n"
+        "metric rules: fitness+steps->garmin_steps; fitness+running/marathon/5k/10k->garmin_runs;\n"
+        "  recurring sessions/classes->calendar; everything else->manual.\n"
+        "Return ONLY the JSON object. Do not invent a plan the person did not state."
+    )
 
 
-def parse_create_goal(text: str, llm_complete_fn=None) -> dict:
+def _resolve_deadline(deadline: str | None, today: date) -> str | None:
+    """Post-parse guard: if the LLM returned a past ISO date, correct it.
+
+    Correction logic:
+    - Parse as YYYY-MM-DD. If it doesn't parse, return as-is (natural text).
+    - If the date is already in the future, return as-is.
+    - If the date is in the past: take its month+day. If month+day hasn't
+      passed this calendar year yet, use this year. Otherwise use next year.
+    """
+    if not deadline or not isinstance(deadline, str):
+        return deadline
+    # Only apply the guard to ISO-format dates; leave natural text alone.
+    try:
+        parsed = date.fromisoformat(deadline.strip())
+    except ValueError:
+        return deadline  # natural text like "in 10 weeks" — leave as-is
+    if parsed >= today:
+        return deadline  # already future — no correction needed
+    # Past date: try same month/day this year first, then next year.
+    try:
+        corrected = parsed.replace(year=today.year)
+    except ValueError:
+        # Feb 29 in a non-leap year — use next year
+        corrected = parsed.replace(year=today.year + 1)
+    if corrected < today:
+        corrected = corrected.replace(year=corrected.year + 1)
+    _logger.warning(
+        "deadline guard: LLM returned past date %r → corrected to %s",
+        deadline,
+        corrected.isoformat(),
+    )
+    return corrected.isoformat()
+
+
+def parse_create_goal(text: str, llm_complete_fn=None, *, today: date | None = None) -> dict:
     """Parse free text into goal fields.
 
     Returns a dict with keys: title, type, target, plan, metric, deadline.
     Uses the injected llm_complete_fn (if provided) to extract fields.
     Falls back to _minimal_goal on LLM failure or missing fn.
     Never raises.
+
+    Args:
+        today: The reference date for deadline resolution. Defaults to
+               date.today(). Pass explicitly in tests for determinism.
     """
     text = (text or "").strip()
+    _today = today if today is not None else date.today()
     fields = _minimal_goal(text)
     if llm_complete_fn is not None:
         try:
             raw = llm_complete_fn(
-                _CREATE_SYSTEM,
+                _create_system(_today.isoformat()),
                 text,
                 max_tokens=300,
                 prefer="groq",
@@ -118,9 +171,10 @@ def parse_create_goal(text: str, llm_complete_fn=None) -> dict:
                         fields[k] = v
         except Exception as exc:  # noqa: BLE001
             _logger.warning("parse_create_goal LLM failed: %r", exc)
-    # Post-processing: normalise type, then re-infer metric as safety net.
+    # Post-processing: normalise type, re-infer metric, guard past deadlines.
     fields["type"] = _normalize_type(fields.get("type"))
     fields["metric"] = _infer_metric(text, fields["type"], fields.get("metric"))
+    fields["deadline"] = _resolve_deadline(fields.get("deadline"), _today)
     return fields
 
 
