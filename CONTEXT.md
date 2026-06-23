@@ -10,7 +10,27 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-22. (**Proactive reasoning loop built — branch `proactive-reasoning-loop`:**
+> Last meaningful update: 2026-06-23. (**Unified personality layer shipped — branch `personality-layer`:**
+> Every structured handler (health, goal, reminder, calendar, self-config) now routes its output
+> through `jack_voice/compose.py` before replying. Jack no longer sounds like a Garmin readout.
+> Architecture: handlers fetch data → build a `fallback_plain` string + a `data` dict → call
+> `_voice(intent, data, user_message, fallback_plain)` → Jack's LLM composes a warm voiced reply
+> or silently returns the fallback on any failure. The 5 key properties: (1) HONEST — the FACTS
+> block (`json.dumps(data)`) is injected verbatim into the system prompt; hard rules prohibit
+> inventing or rounding any value; (2) FRAMING — Jack reflects, never prescribes
+> medical/training/diet protocols; (3) BRIEF — 1-3 sentences, matches the energy of Arnav's
+> message; (4) FAST-PATH FALLBACK — any LLM error, timeout, or kill-switch returns the old
+> formatted string immediately, never blocks; (5) FACTS PRESERVED — numbers survive
+> exactly as passed. New files: `jack_voice/__init__.py` + `jack_voice/compose.py` (~183 lines).
+> Handler wire: `_voice()` helper in `handler.py` (HERMES_LLM_MOCK=1 → bypass, lazy-import of
+> compose). 17 _voice call sites across 5 handlers. Environment controls:
+> `JACK_VOICE_ENABLED=0` kill-switch (bypasses compose immediately), `JACK_VOICE_TIMEOUT` (default
+> 25s), `JACK_CHAT_REPLY_TOKENS` (default 400), `JACK_CHAT_PROVIDER` (groq/ollama/paid_groq).
+> ⚠️ MODEL-QUALITY NOTE: this layer is the one most sensitive to model quality — a paid-tier
+> upgrade (`JACK_CHAT_PROVIDER=paid_groq`) improves warmth/coherence noticeably. The kill-switch
+> exists so regression to plain strings is one env var. 939/939 tests green (+63 new tests). 3
+> commits on branch `personality-layer`. Awaiting review + merge to main + VPS deploy.
+> Prior update: **Proactive reasoning loop built — branch `proactive-reasoning-loop`:**
 > Replaced hardcoded `check_gym()`, `check_siddhi()`, `check_goals()` in `ProactiveEngine` with
 > an LLM reasoning loop (`ProactiveReasoner`). Jack now reads mem0 memory + calendar + reminders
 > + time context, calls `qwen2.5:14b` via Mac Ollama, and returns structured nudge candidates.
@@ -224,7 +244,7 @@ software-development, etc.).
 - Cold outreach must respect anti-spam / DPDP; protect sender reputation.
 - Prefer free + reliable over clever + fragile.
 
-## 10. Current status (2026-06-21)
+## 10. Current status (2026-06-23)
 > Status corrected against a verified read-only VPS audit on 2026-06-15 — see
 > [docs/AUDIT.md](./docs/AUDIT.md). The prior "interactive chat fast + clean" note was stale.
 
@@ -239,6 +259,14 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 **Working:**
 - ✅ Zero-token reminders that always deliver (no LLM at fire time).
 - ✅ Local Mac brain as fallback (SSH tunnel + launchd persistence); per-job routing exists.
+
+**Built 2026-06-23, GATED deploy (branch `personality-layer`):** Unified personality layer.
+- ✅ **`jack_voice/compose.py` — compose_reply()**: single entry point for all structured replies. Injects personality (SOUL.md), hard rules block (never fabricate, never prescribe, 1-3 sentences), FACTS block (ground-truth data as JSON), and memory context (Mem0 if `JACK_MEMORY_BACKEND=mem0`) into one LLM call per reply.
+- ✅ **17 _voice() call sites** in `handler.py`: health sleep/stats/full, goal create/query/update-progress/update-status, reminder set/list/cancel, calendar list/add, self-config status/list/set. Error paths and empty-result paths deliberately bypass _voice and stay direct.
+- ✅ **Kill-switch**: `JACK_VOICE_ENABLED=0` → compose skipped, plain string returned immediately. Fallback on any LLM error, timeout, or exception.
+- ✅ **Test coverage**: 939 tests green (+63 new), 0 failures. New suites: `test_jack_voice_compose.py` (24), `test_handlers_personality.py` (29), `test_handlers_personality_2.py` (13).
+- ⚠️ **MODEL NOTE**: paid-tier (`JACK_CHAT_PROVIDER=paid_groq`) gives better warmth. Kill-switch is one env var away.
+- 3 commits: `abc2af9`, `cfe5575`, `5c03e0d`. Awaiting merge + VPS deploy.
 
 **Built + DEPLOYED 2026-06-21:** Proactive Jack — autonomous nudge engine.
 - ✅ **`proactive/engine.py` — ProactiveEngine**: monitors Arnav's life context every 15 min and decides

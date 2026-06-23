@@ -221,7 +221,11 @@ class TestRunHealthRealData(unittest.TestCase):
         return message
 
     def test_real_data_sent_to_channel(self):
-        """When get_daily_summary returns valid data, channel.send receives a formatted message."""
+        """When get_daily_summary returns valid data, channel.send receives a formatted message.
+
+        _voice is patched to return the fallback_plain (the pre-composed formatted string)
+        so this test validates data routing, not the personality layer output.
+        """
         import handler as h
 
         message = self._make_message()
@@ -235,7 +239,8 @@ class TestRunHealthRealData(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.get_daily_summary.return_value = fake_summary
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             _run_async(h._run_health(message, route))
 
         message.channel.send.assert_called_once()
@@ -298,6 +303,7 @@ class TestSleepFallbackToYesterday(unittest.TestCase):
         return message
 
     def test_falls_back_to_yesterday_when_today_empty(self):
+        """_voice patched to return fallback_plain — tests data routing not personality layer."""
         import handler as h
 
         message = self._make_message()
@@ -309,7 +315,8 @@ class TestSleepFallbackToYesterday(unittest.TestCase):
         # First call (today) returns None, second call (yesterday) returns data
         mock_client.last_night_sleep.side_effect = [None, yesterday_sleep]
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             asyncio.run(h._run_health(message, route))
 
         sent = message.channel.send.call_args[0][0]
@@ -353,6 +360,7 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         return message
 
     def test_steps_query_returns_count(self):
+        """_voice patched to return fallback_plain — tests data routing not personality layer."""
         import handler as h
 
         message = self._make_message()
@@ -361,7 +369,8 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.get_stats.return_value = {"steps": 43, "calories": 120}
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             asyncio.run(h._run_health(message, route))
 
         sent = message.channel.send.call_args[0][0]
@@ -372,7 +381,10 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         self.assertNotIn("try asking", sent.lower())
 
     def test_sleep_question_calls_last_night_sleep_not_get_daily_summary(self):
-        """Sleep queries use last_night_sleep(), not get_daily_summary()."""
+        """Sleep queries use last_night_sleep(), not get_daily_summary().
+
+        _voice patched to return fallback_plain — tests data routing not personality layer.
+        """
         import handler as h
 
         message = self._make_message()
@@ -382,7 +394,8 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.last_night_sleep.return_value = sleep_data
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             asyncio.run(h._run_health(message, route))
 
         # last_night_sleep was called, get_daily_summary was NOT
@@ -393,7 +406,10 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         self.assertIn("8.0", sent)
 
     def test_stats_question_calls_get_stats_not_get_daily_summary(self):
-        """Stats queries use get_stats(), not get_daily_summary()."""
+        """Stats queries use get_stats(), not get_daily_summary().
+
+        _voice patched to return fallback_plain — tests data routing not personality layer.
+        """
         import handler as h
 
         message = self._make_message()
@@ -402,7 +418,8 @@ class TestStepsQueryReturnsNumber(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.get_stats.return_value = {"steps": 1234, "body_battery_high": 90}
 
-        with patch("integrations.garmin.GarminClient", return_value=mock_client):
+        with patch("integrations.garmin.GarminClient", return_value=mock_client), \
+             patch("handler._voice", side_effect=lambda i, d, u, f: f):
             asyncio.run(h._run_health(message, route))
 
         mock_client.get_stats.assert_called()
