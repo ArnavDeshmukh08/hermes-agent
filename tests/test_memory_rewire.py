@@ -141,12 +141,12 @@ class ConversationMem0PathTest(unittest.TestCase):
         self.assertIn("Prefers Groq over OpenAI", system)
 
     def test_build_prompt_memory_block_before_guidance(self):
-        """Memory block must appear before the 'How to behave' guidance section."""
+        """Memory block must appear before the react-first guidance section."""
         memories = [{"memory": "Loves pizza"}]
         h, _ = self._handler_with_retriever()
         system, _ = h.build_prompt("hi", "u1", memories=memories)
         mem_pos = system.index("What I remember")
-        guidance_pos = system.index("How to behave right now")
+        guidance_pos = system.index("HOW JACK REPLIES")
         self.assertLess(mem_pos, guidance_pos)
 
     def test_retriever_is_not_none_when_injected(self):
@@ -176,7 +176,7 @@ class ConversationMem0PathTest(unittest.TestCase):
         system = h._system_prompt(memory_block="# What I remember\n- Fact A")
         profile_pos = system.index("About the person")
         mem_pos = system.index("What I remember")
-        guidance_pos = system.index("How to behave right now")
+        guidance_pos = system.index("HOW JACK REPLIES")
         self.assertLess(profile_pos, mem_pos)
         self.assertLess(mem_pos, guidance_pos)
 
@@ -650,17 +650,17 @@ You are Jack, Chief of Staff for Arnav Deshmukh, a technical founder.
         self.assertEqual(len(ctx), 4)
 
     def test_prompt_stays_under_budget(self):
-        # Budget must exceed the system-prompt floor (~635 tokens with capabilities block)
-        # to leave room for at least the current message. We use 800 so the trimming
-        # logic fires (drops old history) and the assertion still validates it.
+        # Budget must exceed the system-prompt floor (~1400 tokens with personality
+        # + react rules + few-shots + constraints). We use 2000 so the trimming
+        # logic still fires (drops old history) and the assertion validates it.
         from conversation import estimate_tokens
-        h = self._handler(max_turns=20, token_budget=800)
+        h = self._handler(max_turns=20, token_budget=2000)
         for i in range(20):
             h.add_turn("u", "user", "x" * 400)
             h.add_turn("u", "assistant", "y" * 400)
         system, user_block = h.build_prompt("current question", "u")
         total = estimate_tokens(system) + estimate_tokens(user_block)
-        self.assertLessEqual(total, 800)
+        self.assertLessEqual(total, 2000)
 
     def test_current_message_always_present(self):
         h = self._handler(max_turns=20, token_budget=1)

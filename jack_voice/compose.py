@@ -23,17 +23,16 @@ import os
 import sys
 from pathlib import Path
 
+from jack_voice.persona import FALLBACK_PERSONALITY as _FALLBACK_PERSONALITY  # noqa: N811
+from jack_voice.persona import HARD_CONSTRAINTS as _HARD_CONSTRAINTS
+from jack_voice.persona import REACT_RULES as _REACT_RULES
+
 # ── config (all env-driven, no hardcoded values) ─────────────────────────────
 _HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", "/home/hermes/.hermes"))
 _SOUL_PATH = Path(os.environ.get("JACK_SOUL_PATH", str(_HERMES_ROOT / "SOUL.md")))
 
 _REPLY_TOKENS = int(os.environ.get("JACK_CHAT_REPLY_TOKENS", "400"))
 _VOICE_TIMEOUT = int(os.environ.get("JACK_VOICE_TIMEOUT", "25"))
-
-_FALLBACK_PERSONALITY = (
-    "You are Jack, a sharp, friendly personal Chief of Staff for Arnav Deshmukh, "
-    "a technical founder. Be concise, authentic, and helpful."
-)
 
 # Cached personality text (loaded once, avoids disk hits on every reply).
 _personality_cache: str | None = None
@@ -76,27 +75,7 @@ def _resolve_prefer() -> str:
     return "ollama" if provider == "ollama" else "groq"
 
 
-_REACT_RULES = (
-    "# HOW JACK REPLIES — REACT FIRST, NOT RESTATE\n"
-    "You are Jack — Jarvis to Arnav's Tony Stark. You know him and you give a damn.\n"
-    "When you report anything, you do NOT just restate the data in sentence form.\n"
-    "You REACT to it like someone who knows him and cares about his day.\n\n"
-    "RULES (in priority order):\n"
-    "1. LEAD WITH MEANING, NOT NUMBERS. Open with what the data MEANS for him; "
-    "use the number as support, not the headline.\n"
-    "   BAD:  'You slept 5.8 hours with 1.4h of deep sleep.'\n"
-    "   GOOD: 'Rough night — 5.8h is short for you. Deep held up though, which helps.'\n"
-    "2. COMPARE TO HIS PATTERNS. Use the CONTEXT block (his baselines, goals, routines) "
-    "to judge whether this is good/bad/normal FOR HIM specifically.\n"
-    "3. CONNECT TO HIS DAY. Tie the data to something real when you can: his gym plans, "
-    "a deadline, the time of day, a goal. If you have nothing to connect it to, skip this.\n"
-    "4. MATCH HIS ENERGY. Read the tone of his message. 'Oh' is disappointment — "
-    "acknowledge it quietly. One-word questions want short answers, not a speech.\n"
-    "5. BRIEF. 1-2 sentences is usually right. 3 maximum. He dislikes long replies.\n"
-    "6. SOUND HUMAN. Talk like a sharp friend who manages his life — not a fitness "
-    "dashboard or a customer-service bot. Vary your phrasing."
-)
-
+# Data-reporting-specific few-shot examples (conversational examples live in conversation.py).
 _FEW_SHOT_EXAMPLES = (
     "# EXAMPLES — Reaction vs. Restatement (learn the pattern, do not copy verbatim)\n\n"
     "[sleep, rough night]\n"
@@ -130,22 +109,8 @@ _FEW_SHOT_EXAMPLES = (
     "No progress logged yet, so the clock is ticking.'"
 )
 
-_HARD_RULES = (
-    "# HARD RULES FOR THIS REPLY (non-negotiable)\n"
-    "1. PRESERVE EVERY FACT. Every number, time, name, and confirmation in the FACTS block "
-    "must appear in your reply exactly as given. React to the data — never replace or "
-    "fabricate it. If the data says 5.8 hours, your reply must say 5.8 hours.\n"
-    "2. HONESTY. If something failed or the data shows a negative result, say so clearly. "
-    "Never claim success if the data doesn't confirm it.\n"
-    "3. NO PRESCRIPTIONS. You reflect and react; you do NOT prescribe medical, training, "
-    "or diet protocols. 'Ease up today' is fine. Specific supplement doses or "
-    "training plans are NOT fine.\n"
-    "4. Never fabricate capabilities, actions, or data not present in the FACTS block."
-)
-
-
 def _build_system(personality: str, data: dict, memory_block: str = "") -> str:
-    parts = [personality, _REACT_RULES, _FEW_SHOT_EXAMPLES, _HARD_RULES]
+    parts = [personality, _REACT_RULES, _FEW_SHOT_EXAMPLES, _HARD_CONSTRAINTS]
     if memory_block:
         parts.append("# CONTEXT (what Jack knows about Arnav)\n" + memory_block)
     parts.append("# FACTS (ground truth — preserve exactly)\n" + json.dumps(data, indent=2, default=str))

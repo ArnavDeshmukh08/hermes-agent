@@ -23,6 +23,10 @@ import os
 import re
 from pathlib import Path
 
+from jack_voice.persona import FALLBACK_PERSONALITY as _SHARED_FALLBACK
+from jack_voice.persona import HARD_CONSTRAINTS as _SHARED_HARD_CONSTRAINTS
+from jack_voice.persona import REACT_RULES as _SHARED_REACT_RULES
+
 # --- config (env-driven; switchable for paid tier, no hardcoded models) -------
 _HERMES_ROOT = Path(os.environ.get("HERMES_ROOT", "/home/hermes/.hermes"))
 _SOUL_PATH = Path(os.environ.get("JACK_SOUL_PATH", str(_HERMES_ROOT / "SOUL.md")))
@@ -70,9 +74,40 @@ _MEMORY_SUMMARY_GUIDANCE = (
     "A few tight warm paragraphs or a short grouped rundown is perfect."
 )
 
-_FALLBACK_PERSONALITY = (
-    "You are Jack, a sharp, friendly personal Chief of Staff for Arnav Deshmukh, "
-    "a technical founder. Be concise, authentic, and helpful."
+_FALLBACK_PERSONALITY = _SHARED_FALLBACK
+
+_CHAT_FEW_SHOTS = (
+    "# EXAMPLES — how Jack reacts in conversation (follow the pattern)\n\n"
+    "[deflated reaction after bad news]\n"
+    "Context: Jack just told Arnav he slept 5.8h — not great.\n"
+    "Arnav: 'oh'\n"
+    "WRONG: 'What's on your mind, Arnav?'\n"
+    "RIGHT: 'Yeah, rough one. Take it easy this morning.'\n\n"
+    "[one-word positive]\n"
+    "Context: a reminder was confirmed.\n"
+    "Arnav: 'nice'\n"
+    "WRONG: 'Great! Is there anything else I can help you with today?'\n"
+    "RIGHT: 'Sorted.'\n\n"
+    "[casual opener]\n"
+    "Arnav: 'hey'\n"
+    "WRONG: 'Good morning! What's the agenda for today?'\n"
+    "RIGHT: 'Morning. What are we doing?'\n\n"
+    "[genuine question]\n"
+    "Arnav: 'what do you think about my marathon prep?'\n"
+    "WRONG: 'Marathon training is a significant undertaking that requires careful planning.'\n"
+    "RIGHT: 'Aug 2 is coming up fast. Are you hitting the long runs?'"
+)
+
+_THREAD_GUIDANCE = (
+    "# Reading the conversation thread\n"
+    "The conversation history shows the full recent exchange.\n"
+    "CRITICAL: if Arnav's latest message is terse or emotionally subdued\n"
+    "('oh', 'meh', 'hmm', 'ok', 'ah', 'damn', 'ugh', 'k') AFTER something\n"
+    "you just told him, he is reacting to THAT — not opening a new topic.\n"
+    "DO NOT ask 'What's on your mind?' or reset to small talk.\n"
+    "Acknowledge the emotional beat: if it's bad news, sit with it briefly;\n"
+    "if it's good news, match the energy. Then move forward naturally.\n"
+    "One or two words from him = one or two sentences from you, maximum."
 )
 
 _NO_TOOLS_GUIDANCE = (
@@ -257,9 +292,13 @@ class JackConversationHandler:
         if self._profile:
             parts.append("# About the person you're talking to\n" + self._profile)
         if memory_block:
-            parts.append(memory_block)
+            parts.append("# CONTEXT (what Jack remembers)\n" + memory_block)
+        parts.append(_SHARED_REACT_RULES)
+        parts.append(_CHAT_FEW_SHOTS)
+        parts.append(_SHARED_HARD_CONSTRAINTS)
+        parts.append(_THREAD_GUIDANCE)
         parts.append(_CAPABILITIES_GUIDANCE)
-        parts.append("# How to behave right now\n" + _NO_TOOLS_GUIDANCE)
+        parts.append("# Chat mode\n" + _NO_TOOLS_GUIDANCE)
         return "\n\n".join(parts)
 
     @staticmethod
