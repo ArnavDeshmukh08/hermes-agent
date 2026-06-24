@@ -1,0 +1,14 @@
+[Unit]
+Description=Jack Voice Bridge — HTTP gateway for Mac voice service
+After=network.target hermes-gateway.service
+
+[Service]
+Type=simple
+ExecStart=/home/hermes/.hermes/hermes-agent/venv/bin/python /home/hermes/.hermes/voice_bridge/server.py
+WorkingDirectory=/home/hermes/.hermes
+Environment=HERMES_HOME=/home/hermes/.hermes
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
