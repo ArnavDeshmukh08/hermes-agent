@@ -166,3 +166,26 @@ class GarminClient:
             return None
 
         return data
+
+    def get_recent_runs(self, days: int = 7) -> list[dict] | None:
+        """Return recent running activities from Mac /workouts endpoint, or None.
+
+        Returns a list of workout dicts, empty list if no runs, or None if
+        the Mac service is unreachable. Never raises.
+        """
+        url = f"{self._base_url}/workouts?days={days}"
+        try:
+            data = _get(url, self._timeout)
+        except Exception:
+            logger.warning("Garmin: failed to fetch workouts from %s", url, exc_info=True)
+            return None
+
+        if not isinstance(data, dict):
+            logger.warning("Garmin: unexpected workouts response: %r", data)
+            return None
+
+        workouts = data.get("workouts")
+        if not isinstance(workouts, list):
+            return None
+
+        return workouts

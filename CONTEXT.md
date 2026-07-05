@@ -10,7 +10,9 @@
 >
 > Companion files: `CLAUDE.md` (goals + rules of engagement), `MEMORY.md` (chronological work
 > log), `skills/` (operational runbooks), `secrets/` (credentials, gitignored).
-> Last meaningful update: 2026-06-23. (**Unified personality layer shipped — branch `personality-layer`:**
+> Last meaningful update: 2026-07-05. (**Google Calendar + Gmail read/draft, Orsa CRM read, Apollo
+> enrichment shipped locally — see §10; one manual OAuth consent left to go live.**) Prior:
+> 2026-06-23. (**Unified personality layer shipped — branch `personality-layer`:**
 > Every structured handler (health, goal, reminder, calendar, self-config) now routes its output
 > through `jack_voice/compose.py` before replying. Jack no longer sounds like a Garmin readout.
 > Architecture: handlers fetch data → build a `fallback_plain` string + a `data` dict → call
@@ -244,9 +246,44 @@ software-development, etc.).
 - Cold outreach must respect anti-spam / DPDP; protect sender reputation.
 - Prefer free + reliable over clever + fragile.
 
-## 10. Current status (2026-06-23)
+## 10. Current status (2026-07-05)
 > Status corrected against a verified read-only VPS audit on 2026-06-15 — see
 > [docs/AUDIT.md](./docs/AUDIT.md). The prior "interactive chat fast + clean" note was stale.
+
+**Built 2026-07-05 (local, tests green — one manual step to go live): Google + Orsa + Apollo read/draft layer.**
+- ✅ **Unified Google OAuth** (`integrations/google_auth.py` + `bin/jack_google_auth.py`) — one
+  installed-app consent mints a refresh token at `~/.hermes/google_token.json` (0600); calendar +
+  Gmail both ride it and it auto-refreshes, so it survives restarts with no re-auth. Chosen over a
+  service account because a service account can't read a personal Gmail / create drafts.
+- ✅ **Gmail read + draft-only** (`integrations/gmail.py`) — list unread business mail, create reply
+  drafts. Deliberately **no send path** (enforced + test-guarded); drafts sit in Drafts for approval.
+- ✅ **Orsa CRM read** (`integrations/orsa.py`) — read-only (`mode=ro`, live not immutable) over
+  `~/Documents/leadkiln/backend/orsa.db`; "new leads this week" / exact counts. Verified live (116
+  leads, 73 in last 7d). New router intents: **`email`** (list/draft) and **`crm`** (query).
+- ✅ **Apollo enrichment + contact reconciler** (`integrations/apollo.py`, `contact_reconciler.py`) —
+  unread senders not in Orsa get Apollo-enriched and flagged (never silently dropped).
+- ✅ **Split-brain bridge (Option A)** — token + Orsa DB live on the Mac; the VPS gateway proxies over
+  Tailscale, same shape as Garmin. Mac service `mac_services/jack_google_service.py` (+ launchd
+  `com.hermes.jack-google.plist`, port 8770, optional `X-Jack-Token`); VPS proxies
+  `integrations/mac_remote.py` behind `integrations/google_provider.py` (factory: direct on Mac,
+  remote when `JACK_GOOGLE_REMOTE=1`). Handler + morning briefing now call the provider.
+- ✅ **Verified live** (2026-07-05): OAuth connected (`arnavdeshmukh008@gmail.com`); Calendar + Gmail
+  read live; draft-only proven (draft lands in Drafts, SENT count unchanged, test artefact deleted);
+  Orsa live (116 leads / 73 this week, writes blocked); **full bridge exercised end-to-end** (Mac
+  service ↔ remote proxies, incl. draft round-trip + 401 on bad token). 166 tests green, lint-clean.
+- ✅ **LIVE IN DISCORD (2026-07-05 night):** Mac launchd service `com.hermes.jack-google` loaded +
+  KeepAlive-verified; VPS env set (`JACK_GOOGLE_REMOTE=1` etc.); updated router/handler/provider +
+  `jack_voice/compose.py` deployed to the box and gateway restarted. Jack now answers "unread emails"
+  (8, live), "new leads in Orsa this week" (73), and drafts replies from Discord. Deploy backups on
+  the box: `~/.hermes/.deploy_backups/bak{,2,3}-20260705/`.
+- ✅ **Post-launch fixes:** (1) compose layer misread `count` as "none this week vs overall" → made
+  CRM/email FACTS keys self-describing + added few-shot examples; (2) "generate leads in Orsa" over-
+  promised → added a read-only guard (`crm/readonly_notice`, fixed-string reply) so Jack honestly
+  says he can't write Orsa.
+- **Open (optional):** set `JACK_APOLLO_API_KEY` on the VPS for enrichment; add a shared
+  `JACK_MAC_SERVICE_TOKEN` (Mac plist + VPS .env) to lock the bridge; keep the Mac awake so the
+  bridge stays reachable. Steps: [mac_services/README.md](./mac_services/README.md). Build notes:
+  [docs/JACK_GOOGLE_ORSA_NOTES.md](./docs/JACK_GOOGLE_ORSA_NOTES.md).
 
 **🔴 Critical instability (verified live):** interactive chat currently **413s on every
 substantive turn**. The fixed per-turn overhead is ~17k tokens — dominated by the
@@ -267,6 +304,20 @@ ROADMAP Phase 0: shrink the skills prompt (`/context` → `skills-pruner`).
 - ✅ **Test coverage**: 939 tests green (+63 new), 0 failures. New suites: `test_jack_voice_compose.py` (24), `test_handlers_personality.py` (29), `test_handlers_personality_2.py` (13).
 - ⚠️ **MODEL NOTE**: paid-tier (`JACK_CHAT_PROVIDER=paid_groq`) gives better warmth. Kill-switch is one env var away.
 - 3 commits: `abc2af9`, `cfe5575`, `5c03e0d`. Awaiting merge + VPS deploy.
+
+**Built + DEPLOYED 2026-06-24 (Phase 2 voice polish — now running on Mac):**
+- ✅ **Mac voice pipeline live**: openwakeword ("Hey Jarvis") → sounddevice → faster-whisper →
+  HTTP POST Tailscale `100.115.193.64:8766` → `JackConversationHandler` → Piper/`say` TTS.
+- ✅ **Barge-in**: TTS runs via `subprocess.Popen`; mic RMS monitored during SPEAKING; 4 loud
+  chunks interrupt TTS and jump straight to RECORDING. `speak()` returns `True`/`False`.
+- ✅ **Phase 2 fixes post-launch**: (1) openwakeword tflite crash on Python 3.13 — no wheel
+  exists. Fix: `_ensure_oww_models()` calls `download_models(["hey_jarvis"])` once to fetch
+  ONNX variants; `_get_oww()` passes `inference_framework="onnx"` to bypass tflite entirely.
+  (2) `launchctl load` → "error 5" on Sequoia 15.5 — replaced with
+  `launchctl bootstrap gui/$(id -u)`. Service stable at PID 37686, 0 restarts.
+- ✅ **launchd agent**: `com.hermes.voice.plist`, logs to `/tmp/jack-voice-service.log`.
+- ✅ **VPS bridge**: `jack-voice-bridge.service` (systemd --user, port 8766 Tailscale-only).
+- ✅ **Tests**: 1050 passing (20 new Phase 2 tests), 3 skipped.
 
 **Built + DEPLOYED 2026-06-21:** Proactive Jack — autonomous nudge engine.
 - ✅ **`proactive/engine.py` — ProactiveEngine**: monitors Arnav's life context every 15 min and decides

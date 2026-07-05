@@ -126,10 +126,10 @@ class MorningBriefing:
         if not _truthy(os.environ.get("JACK_CALENDAR_ENABLED")):
             return ""
         try:
-            from integrations.calendar import CalendarClient  # lazy import
+            from integrations import google_provider  # lazy import
 
             day = now.astimezone(_IST) if now is not None else None
-            return CalendarClient().events_summary_text(day=day) or ""
+            return google_provider.calendar_client().events_summary_text(day=day) or ""
         except Exception:  # noqa: BLE001 — outage must never block the briefing
             return ""
 

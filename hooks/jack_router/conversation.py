@@ -60,6 +60,35 @@ _MEMORY_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+_TIME_DATE_RE = re.compile(
+    r"\b(?:"
+    r"what(?:'?s)?\s+(?:the\s+)?time\b|"
+    r"what\s+time\s+is\s+it\b|"
+    r"current\s+time\b|"
+    r"tell\s+me\s+the\s+time\b|"
+    r"what(?:'?s)?\s+(?:today'?s?\s+)?date\b|"
+    r"what\s+day\s+is\s+it\b|"
+    r"what\s+day\s+(?:is\s+)?today\b|"
+    r"today'?s?\s+date\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _current_ist_time_reply() -> str:
+    """Return real IST time — NEVER fabricated, NEVER from LLM."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    now = _dt.datetime.now(ZoneInfo("Asia/Kolkata"))
+    h = now.hour % 12 or 12
+    ampm = "AM" if now.hour < 12 else "PM"
+    return (
+        f"It's {h}:{now.minute:02d} {ampm} IST — "
+        f"{now.strftime('%A, %d %B %Y')}."
+    )
+
+
 _MEMORY_SUMMARY_GUIDANCE = (
     "Below is everything you remember about this person. "
     "Summarize it back to them warmly, the way a close friend would — "
@@ -144,7 +173,9 @@ _CAPABILITIES_GUIDANCE = (
     "NEVER claim a capability you do not have. "
     "If unsure whether you can do something, say you are not sure rather than fabricating. "
     "Accuracy about your own abilities is non-negotiable — fabricating them is the worst "
-    "thing you can do."
+    "thing you can do.\n"
+    "- Current time/date: you always read the REAL system clock in IST (Asia/Kolkata) "
+    "for time and date questions. You NEVER guess or invent the time from routines or memory.\n"
 )
 
 # Sentences in SOUL.md that tell Jack to proactively ask for the agenda. These
@@ -430,6 +461,11 @@ class JackConversationHandler:
         # Memory-query path: read live USER.md and summarize, bypassing chat.
         if _MEMORY_QUERY_RE.search(user_message or ""):
             return await self._answer_memory_query(user_message)
+
+        # Time/date guard: answer from the real clock, never from LLM.
+        # LLM would pattern-match Arnav's routine and fabricate a time.
+        if _TIME_DATE_RE.search(user_message or ""):
+            return _current_ist_time_reply()
 
         # Retrieve memory context off the event loop (blocking Qdrant search in thread).
         # On flatfile backend, _retriever is None and this block is a no-op.

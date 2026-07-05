@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.jack-caffeinate</string>
+  <!-- Keeps the Mac awake so the Google/Orsa bridge stays reachable from the VPS.
+       Flags: -i prevent idle system sleep, -s prevent system sleep (AC power only),
+       -m prevent disk idle. On BATTERY the Mac sleeps normally — this only asserts
+       wakefulness while plugged in. Reversible: launchctl unload to stop. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>-s</string>
+    <string>-m</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/jack-caffeinate.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/jack-caffeinate-error.log</string>
+</dict>
+</plist>

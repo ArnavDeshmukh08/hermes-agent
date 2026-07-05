@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JACK OS — Command Center</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- boot sequence -->
+  <div id="boot">
+    <div class="logo">JACK&nbsp;OS</div>
+    <div class="lines" id="bootLines"></div>
+  </div>
+
+  <!-- background layers -->
+  <canvas id="starfield"></canvas>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="scanline"></div>
+
+  <main class="shell">
+    <!-- top bar -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">JACK&nbsp;OS</span>
+        <span class="tag">Personal Agent OS</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="stat-chip"><span class="k">Agents</span><span class="v" id="agentCount">— / —</span></div>
+      <div class="stat-chip"><span class="k">Core</span><span class="v" id="coreLink">◇ link</span></div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="stat-chip" style="align-items:center"><span class="k">Sync</span><span class="sync-dot" id="syncDot"></span></div>
+    </header>
+
+    <!-- command bar -->
+    <div class="command">
+      <span class="prompt">&gt;_</span>
+      <input id="cmd" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Ask Jack anything — e.g. what's on my calendar today" />
+      <span class="route-chip" id="routeChip"></span>
+      <button class="go" id="cmdGo">Route</button>
+    </div>
+    <div class="hint" style="color:var(--text-faint);font-size:10px;letter-spacing:.5px;margin:6px 2px 0">
+      Preview only — shows how Jack would route your message. It does not execute.
+    </div>
+
+    <!-- main grid -->
+    <section class="grid" id="grid">
+      <!-- CORE -->
+      <div class="panel col-4 core" id="corePanel">
+        <div class="reactor" id="reactor">
+          <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+          <div class="orb"></div>
+        </div>
+        <div class="label online" id="coreLabel">CONNECTING…</div>
+        <div class="sub" id="coreSub">initializing agent mesh</div>
+        <div class="vitals" id="coreVitals"></div>
+      </div>
+
+      <!-- AGENTS -->
+      <div class="panel col-4" id="agentsPanel">
+        <div class="panel-head"><span class="icon">◈</span><h2>Agent Mesh</h2><span class="badge" id="agentsBadge"></span></div>
+        <div id="agents"><div class="offline">◌ linking…</div></div>
+      </div>
+
+      <!-- ORSA PIPELINE -->
+      <div class="panel col-4" id="leadsPanel">
+        <div class="panel-head"><span class="icon">▤</span><h2>Orsa Pipeline</h2><span class="badge">CRM</span></div>
+        <div id="leads"><div class="offline">◌ reading…</div></div>
+      </div>
+
+      <!-- CALENDAR -->
+      <div class="panel col-4" id="calPanel">
+        <div class="panel-head"><span class="icon">◵</span><h2>Today</h2><span class="badge">Calendar</span></div>
+        <div id="calendar"><div class="offline">◌ syncing…</div></div>
+      </div>
+
+      <!-- INBOX -->
+      <div class="panel col-4" id="mailPanel">
+        <div class="panel-head"><span class="icon">✉</span><h2>Inbox</h2><span class="badge">Gmail · read</span></div>
+        <div id="email"><div class="offline">◌ syncing…</div></div>
+      </div>
+
+      <!-- VITALS -->
+      <div class="panel col-4" id="healthPanel">
+        <div class="panel-head"><span class="icon">♥</span><h2>Vitals</h2><span class="badge">Garmin</span></div>
+        <div id="health"><div class="offline">◌ reading…</div></div>
+      </div>
+
+      <!-- REMINDERS -->
+      <div class="panel col-4" id="remPanel">
+        <div class="panel-head"><span class="icon">◷</span><h2>Reminders</h2><span class="badge" id="remBadge"></span></div>
+        <div id="reminders"><div class="offline">◌ linking…</div></div>
+      </div>
+
+      <!-- GOALS -->
+      <div class="panel col-4" id="goalsPanel">
+        <div class="panel-head"><span class="icon">◎</span><h2>Goals</h2><span class="badge">Trajectory</span></div>
+        <div id="goals"><div class="offline">◌ linking…</div></div>
+      </div>
+
+      <!-- NUDGES -->
+      <div class="panel col-4" id="nudgePanel">
+        <div class="panel-head"><span class="icon">⚡</span><h2>Proactive Feed</h2><span class="badge" id="nudgeBadge"></span></div>
+        <div id="nudges"><div class="offline">◌ linking…</div></div>
+      </div>
+    </section>
+
+    <footer style="margin-top:22px;text-align:center;color:var(--text-faint);font-size:10px;letter-spacing:2px;text-transform:uppercase">
+      Jack OS · split-brain agent · read-safe · draft-only · <span id="lastSync">—</span>
+    </footer>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Jack Garmin hourly health snapshot poll (one-shot)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.hermes
+EnvironmentFile=%h/.hermes/.env
+ExecStart=/usr/bin/python3 %h/.hermes/integrations/garmin_poller.py --once
+StandardOutput=journal
+StandardError=journal

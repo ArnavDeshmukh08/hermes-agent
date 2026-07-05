@@ -67,9 +67,14 @@ class CalendarClient:
         calendar_id: str | None = None,
         creds_path: str | None = None,
     ) -> None:
-        self.calendar_id: str | None = calendar_id or os.environ.get("JACK_CALENDAR_ID")
+        # Default to "primary" so reads work out-of-the-box against the OAuth-connected
+        # personal calendar; JACK_CALENDAR_ID still overrides (needed for a shared
+        # calendar reached via the service-account path).
+        self.calendar_id: str | None = (
+            calendar_id or os.environ.get("JACK_CALENDAR_ID") or "primary"
+        )
         self.creds_path: str = creds_path or _DEFAULT_CREDS_PATH
-        self._svc = None  # populated lazily by _service()
+        self._svc = None  # populated lazily by _service() / _read_service()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -101,6 +106,27 @@ class CalendarClient:
             return None
         except Exception:  # noqa: BLE001 — any build failure → not connected
             return None
+
+    def _read_service(self):
+        """Return a service for READ calls, preferring OAuth (personal account).
+
+        Order: an already-built/injected service (also the test hook) → OAuth creds
+        (integrations.google_auth) → the service-account path (_service). Returns None
+        when none are available. Never raises.
+        """
+        if self._svc is not None:
+            return self._svc
+        try:
+            from integrations.google_auth import build_service  # lazy
+
+            svc = build_service("calendar", "v3")
+        except Exception:  # noqa: BLE001
+            svc = None
+        if svc is not None:
+            self._svc = svc
+            return svc
+        # Fall back to the original service-account path.
+        return self._service()
 
     # ------------------------------------------------------------------
     # Public API
@@ -161,7 +187,7 @@ class CalendarClient:
 
         An empty calendar returns [] (not None).
         """
-        svc = self._service()
+        svc = self._read_service()
         if svc is None or not self.calendar_id:
             return None
 

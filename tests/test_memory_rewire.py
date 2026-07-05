@@ -196,11 +196,13 @@ class ConversationMem0PathTest(unittest.TestCase):
         mock_retriever.search.assert_called_once()
 
     def test_respond_passes_user_message_to_retriever(self):
+        # "what time is it?" is now intercepted before the retriever (time fast-path).
+        # Use a query that must reach the retriever.
         h, mock_retriever = self._handler_with_retriever(memories=[])
         with patch("lib.llm.complete", return_value="ok"):
-            self._run(h.respond("what time is it?", "u1"))
+            self._run(h.respond("how are you doing?", "u1"))
         call_args = mock_retriever.search.call_args
-        self.assertEqual(call_args[0][0], "what time is it?")
+        self.assertEqual(call_args[0][0], "how are you doing?")
 
     def test_respond_passes_user_id_to_retriever(self):
         h, mock_retriever = self._handler_with_retriever(memories=[])

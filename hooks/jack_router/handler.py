@@ -335,9 +335,9 @@ async def _run_calendar(message, route) -> None:
     text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
     try:
         async with _sem():
-            from integrations.calendar import CalendarClient  # lazy import
+            from integrations import google_provider  # lazy import
 
-            client = CalendarClient()
+            client = google_provider.calendar_client()
 
             if action == "list":
                 events = await asyncio.to_thread(client.list_events)
@@ -421,6 +421,179 @@ def _extract_event_title(text: str) -> str:
     t = re.sub(r"\s+", " ", t).strip(" .,!?")
     t = re.sub(r"^(?:a|an|the|my)\s+", "", t, flags=re.IGNORECASE)  # drop leading article ("a gym session")
     return t or text.strip()
+
+
+# Message shown whenever a Google-backed feature is asked for but OAuth isn't set up.
+_GOOGLE_NOT_CONNECTED = (
+    "📭 Google isn't connected yet. Run the one-time consent on your Mac:\n"
+    "`python3 bin/jack_google_auth.py`\n"
+    "After that I'll read it on every restart — no re-auth needed."
+)
+
+# Reply-to-sender extraction: "reply to the email from Sarah" → "Sarah".
+_EMAIL_TARGET_RE = re.compile(
+    r"\b(?:from|to|for)\s+([A-Z][\w'&.-]*(?:\s+[A-Z][\w'&.-]*)?)",
+)
+
+
+def _draft_reply_body(msg: dict) -> str:
+    """Build a courteous, clearly-a-starting-point reply skeleton for *msg*.
+
+    Deterministic (no LLM dependency) so the draft is predictable; Arnav edits it
+    before sending. Never includes anything Jack didn't actually read from the thread.
+    """
+    sender = (msg.get("from") or "there").split()[0].strip(",") or "there"
+    subject = msg.get("subject") or ""
+    ref = f" about “{subject}”" if subject and subject != "(no subject)" else ""
+    return (
+        f"Hi {sender},\n\n"
+        f"Thanks for your email{ref} — following up here.\n\n"
+        "[Jack drafted this as a starting point — edit before sending.]\n\n"
+        "Best,\nArnav"
+    )
+
+
+async def _run_email(message, route) -> None:
+    """List unread business mail, or draft a reply — Gmail is read + draft-only.
+
+    There is NO send path: `draft` creates a Gmail draft in Arnav's Drafts folder and
+    stops. Blocking Gmail calls run in threads. Never crashes the gateway.
+    """
+    channel = message.channel
+    action = route.params.get("action", "list")
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+    try:
+        async with _sem():
+            from integrations import google_provider  # lazy import
+
+            client = google_provider.gmail_client()
+
+            if action == "draft":
+                unread = await asyncio.to_thread(client.list_unread, None, 15)
+                if unread is None:
+                    await channel.send(_GOOGLE_NOT_CONNECTED)
+                    return
+                if not unread:
+                    await channel.send("📭 No unread email to reply to right now.")
+                    return
+
+                # Pick the target: a sender named in the message, else the newest unread.
+                target = None
+                m = _EMAIL_TARGET_RE.search(text)
+                if m:
+                    needle = m.group(1).lower()
+                    target = next(
+                        (u for u in unread if needle in (u.get("from", "").lower())
+                         or needle in (u.get("from_email", "").lower())),
+                        None,
+                    )
+                target = target or unread[0]
+
+                full = await asyncio.to_thread(client.get_message, target["id"])
+                context = full or target
+                subject = context.get("subject", "")
+                reply_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+                body = _draft_reply_body(context)
+
+                draft = await asyncio.to_thread(
+                    lambda: client.create_draft(
+                        to=context.get("from_email", ""),
+                        subject=reply_subject,
+                        body=body,
+                        thread_id=context.get("thread_id"),
+                        in_reply_to=context.get("rfc_message_id") or None,
+                    )
+                )
+                if draft is None:
+                    await channel.send("✍️ Couldn't create that draft — try again shortly.")
+                    return
+
+                fallback = (
+                    f"✍️ Drafted a reply to {context.get('from', 'them')} "
+                    f"(“{subject}”). It's sitting in your Drafts — I did NOT send it. "
+                    "Review and send when you're happy."
+                )
+                data = {"to": context.get("from", ""), "subject": subject}
+                await channel.send(_voice("email_draft", data, text, fallback))
+                return
+
+            # action == "list"
+            unread = await asyncio.to_thread(client.list_unread, None, 8)
+            if unread is None:
+                await channel.send(_GOOGLE_NOT_CONNECTED)
+                return
+            if not unread:
+                await channel.send("📭 Inbox is clear — no unread business mail.")
+                return
+
+            summary = "\n".join(f"• {u['from']}: {u['subject']}" for u in unread)
+
+            # Flag senders who aren't in Orsa yet (never silently ignore a new contact).
+            # Runs Mac-side (Orsa DB + Apollo live there) via the provider.
+            flag_line = ""
+            try:
+                flag_text = await asyncio.to_thread(google_provider.unknown_contact_flags_text)
+                if flag_text:
+                    flag_line = f"\n\n🔎 Not in Orsa yet:\n{flag_text}"
+            except Exception as e:  # noqa: BLE001 — reconciliation is best-effort
+                _log(f"email reconcile skipped: {e!r}")
+
+            fallback = f"📬 Unread ({len(unread)}):\n{summary}{flag_line}"
+            data = {"unread_count": len(unread), "unread_messages": summary}
+            await channel.send(_voice("email_list", data, text, fallback))
+    except Exception as e:  # noqa: BLE001 — never crash the gateway on an email error
+        await channel.send("📭 Email glitch — try that again?")
+        _log(f"email failed: {e!r}")
+
+
+async def _run_crm(message, route) -> None:
+    """Answer an Orsa CRM read query (this week's new leads / counts). Read-only."""
+    channel = message.channel
+    action = route.params.get("action", "query")
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+
+    # Honest capability boundary: Jack reads Orsa, never writes it. Sent as a fixed
+    # string (no LLM) so it can never be embellished into a promise Jack can't keep.
+    if action == "readonly_notice":
+        await channel.send(
+            "🗂️ I can *read* Orsa but I can't create leads in it — that happens in Orsa "
+            "itself (or your scrape pipeline). Want me to show what's already in there?"
+        )
+        return
+
+    try:
+        async with _sem():
+            from integrations import google_provider  # lazy import
+
+            client = google_provider.orsa_client()
+            if not await asyncio.to_thread(client.is_connected):
+                await channel.send(
+                    "🗂️ Orsa isn't reachable — check the DB path "
+                    "(set JACK_ORSA_DB_PATH if it moved)."
+                )
+                return
+
+            wants_count = bool(re.search(r"\bhow\s+many\b", text, re.IGNORECASE))
+            if wants_count:
+                total = await asyncio.to_thread(client.lead_count)
+                new_n = await asyncio.to_thread(client.new_leads_count, 7)
+                fallback = f"🗂️ Orsa: {total} leads total · {new_n} added in the last 7 days."
+                data = {"total_leads_in_orsa": total, "new_leads_in_last_7_days": new_n}
+                await channel.send(_voice("crm_count", data, text, fallback))
+                return
+
+            new_n = await asyncio.to_thread(client.new_leads_count, 7)
+            if not new_n:
+                await channel.send("🗂️ No new leads in Orsa this week.")
+                return
+            summary = await asyncio.to_thread(client.new_leads_summary_text, 7)
+            fallback = f"🗂️ {new_n} new lead(s) in Orsa this week:\n{summary}"
+            # Self-describing keys so the personality layer can't reinvent the timeframe.
+            data = {"new_leads_in_last_7_days": new_n, "sample_leads": summary}
+            await channel.send(_voice("crm_new_leads", data, text, fallback))
+    except Exception as e:  # noqa: BLE001 — never crash the gateway on a CRM error
+        await channel.send("🗂️ Orsa glitch — try that again?")
+        _log(f"crm failed: {e!r}")
 
 
 def _match_goal(hint: str, goals: list):
@@ -585,6 +758,35 @@ async def _run_goal(message, route) -> None:
         _log(f"goal failed: {e!r}")
 
 
+def _current_ist_time_reply() -> str:
+    """Read the system clock and return a human-friendly IST time string.
+
+    This NEVER touches the LLM — it reads datetime directly so Jack can
+    never fabricate the time from Arnav's routine or memories.
+    """
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    now = _dt.datetime.now(ZoneInfo("Asia/Kolkata"))
+    h = now.hour % 12 or 12
+    ampm = "AM" if now.hour < 12 else "PM"
+    return (
+        f"It's {h}:{now.minute:02d} {ampm} IST — "
+        f"{now.strftime('%A, %d %B %Y')}."
+    )
+
+
+async def _run_time_date(message, route) -> None:  # noqa: ARG001
+    """Reply with the real IST time. No LLM, no bridge, sub-millisecond."""
+    channel = message.channel
+    try:
+        reply = _current_ist_time_reply()
+        await channel.send(reply)
+    except Exception as e:  # noqa: BLE001
+        await channel.send("⚠️ Couldn't read the clock — try again?")
+        _log(f"time_date failed: {e!r}")
+
+
 async def _run_health(message, route) -> None:
     """Fetch Garmin data and post a chat-friendly summary — no agent loop.
 
@@ -703,6 +905,183 @@ async def _run_health(message, route) -> None:
     except Exception as e:  # noqa: BLE001 — never crash the gateway
         await channel.send("⚠️ Couldn't fetch your Garmin data right now — try again in a moment.")
         _log(f"health query failed: {e!r}")
+
+
+def _load_health_today() -> dict | None:
+    """Read ~/.hermes/health_today.json with LOCK_SH. Returns None if missing or unreadable.
+
+    This file is written by the Garmin poller and may not exist yet — we handle
+    that gracefully rather than raising. Uses fcntl.LOCK_SH for safe concurrent reads.
+    """
+    import fcntl
+    import json
+
+    health_path = Path(os.environ.get("JACK_HEALTH_TODAY", str(Path.home() / ".hermes" / "health_today.json")))
+    try:
+        with open(health_path, "r", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _run_marathon_training(user_message: str, route) -> str:  # type: ignore[return]
+    """Build a framing-compliant marathon check-in reply.
+
+    Framing rule: reflect / track ONLY. Never prescribe training, diet, or medical advice.
+    Returns a plain string (personality layer is applied by the caller via _voice()).
+    """
+    import datetime as _dt
+
+    _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+
+    # ── deadline math ─────────────────────────────────────────────────────────
+    today_ist = _dt.datetime.now(_IST).date()
+    deadline_date = _dt.date(2026, 8, 2)
+    days_to_deadline = (deadline_date - today_ist).days
+    weeks_to_deadline = days_to_deadline // 7
+
+    # ── goal data ─────────────────────────────────────────────────────────────
+    goal_title = "Run a marathon"
+    progress_notes_count = 0
+    try:
+        goals = _goal_store().list_active_goals()
+        for g in goals:
+            if "marathon" in g.title.lower() or g.metric == "garmin_runs":
+                goal_title = g.title
+                progress_notes_count = len(g.progress_notes)
+                if g.deadline:
+                    try:
+                        dl = _dt.date.fromisoformat(g.deadline)
+                        days_to_deadline = (dl - today_ist).days
+                        weeks_to_deadline = days_to_deadline // 7
+                        deadline_date = dl
+                    except ValueError:
+                        pass
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── health data — prefer health_today.json, fall back to GarminClient ────
+    steps: int | None = None
+    runs_today = None
+    runs_available = False
+    sleep_hours: float | None = None
+    body_battery: int | None = None
+    health_data_fresh = False
+
+    health_today = _load_health_today()
+    if health_today and not health_today.get("is_stale", True):
+        health_data_fresh = True
+        stats = health_today.get("stats") or {}
+        steps = stats.get("steps")
+        body_battery = stats.get("body_battery_high")
+        sleep_info = health_today.get("sleep") or {}
+        sleep_hours = sleep_info.get("total_sleep_h")
+        runs_today = health_today.get("runs_today")
+        runs_available = bool(health_today.get("runs_available", False))
+    else:
+        # Fall back to live GarminClient if file is absent or stale.
+        try:
+            from integrations.garmin import GarminClient  # lazy import
+
+            client = GarminClient()
+            stats = client.get_stats()
+            if stats:
+                health_data_fresh = True
+                steps = stats.get("steps")
+                body_battery = stats.get("body_battery_high")
+            sleep_info = client.last_night_sleep()
+            if sleep_info:
+                sleep_hours = sleep_info.get("total_sleep_h")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ── load multi-day run history (health_history.json) ─────────────────────
+    history_context: str = ""
+    runs_this_week_count: int | None = None
+    days_since_run: int | None = None
+    try:
+        import json as _json
+        hist_path = Path.home() / ".hermes" / "health_history.json"
+        if hist_path.exists():
+            import fcntl as _fcntl
+            with hist_path.open("r", encoding="utf-8") as _hf:
+                _fcntl.flock(_hf.fileno(), _fcntl.LOCK_SH)
+                try:
+                    _raw_hist = _hf.read()
+                finally:
+                    _fcntl.flock(_hf.fileno(), _fcntl.LOCK_UN)
+            _history = _json.loads(_raw_hist)
+            if isinstance(_history, list) and _history:
+                from integrations.garmin_poller import days_since_last_run, runs_this_week
+                days_since_run = days_since_last_run(_history)
+                runs_this_week_count = runs_this_week(_history)
+                if days_since_run is None:
+                    streak_text = "no run found in recent history"
+                elif days_since_run == 0:
+                    streak_text = "ran today"
+                else:
+                    streak_text = f"last run {days_since_run} day{'s' if days_since_run != 1 else ''} ago"
+                rtw = runs_this_week_count if runs_this_week_count is not None else 0
+                history_context = f"Run history: {rtw} run day(s) this week, {streak_text}."
+            else:
+                history_context = "I don't have run history yet."
+        else:
+            history_context = "I don't have run history yet."
+    except Exception:  # noqa: BLE001
+        history_context = ""
+
+    # ── assemble data dict ────────────────────────────────────────────────────
+    data = {
+        "goal_title": goal_title,
+        "deadline": deadline_date.isoformat(),
+        "weeks_to_deadline": weeks_to_deadline,
+        "days_to_deadline": days_to_deadline,
+        "steps_today": steps,
+        "runs_today": runs_today,
+        "runs_available": runs_available,
+        "sleep_hours": sleep_hours,
+        "progress_notes_count": progress_notes_count,
+        "health_data_fresh": health_data_fresh,
+        "body_battery": body_battery,
+        "history_context": history_context,
+        "runs_this_week": runs_this_week_count,
+        "days_since_last_run": days_since_run,
+    }
+
+    # ── fallback plain — honest, no prescriptions ─────────────────────────────
+    deadline_str = deadline_date.strftime("%b %-d")
+    if not health_data_fresh:
+        data_note = "No Garmin data available right now."
+    else:
+        step_str = f"{steps:,}" if steps is not None else "no step data"
+        run_str = "yes" if runs_today else "none logged"
+        data_note = f"Steps today: {step_str}. Run data in Garmin: {run_str}."
+
+    history_note = f" {history_context}" if history_context else ""
+
+    fallback = (
+        f"Marathon check-in: {weeks_to_deadline} week{'s' if weeks_to_deadline != 1 else ''} to {deadline_str}. "
+        f"{data_note}{history_note}"
+    )
+    return _voice("marathon_training", data, user_message, fallback)
+
+
+async def _run_marathon_training_async(message, route) -> None:
+    """Async wrapper: loads data in a thread and sends the personality-voiced reply."""
+    channel = message.channel
+    text = route.params.get("text") or _strip_mentions(getattr(message, "content", "") or "")
+    try:
+        async with _sem():
+            reply = await asyncio.to_thread(_run_marathon_training, text, route)
+        await channel.send(reply)
+    except Exception as e:  # noqa: BLE001 — never crash the gateway on a marathon check-in
+        await channel.send("⚠️ Couldn't pull your marathon data right now — try again in a moment.")
+        _log(f"marathon_training failed: {e!r}")
 
 
 def _parse_config_request(text: str) -> dict | None:
@@ -902,14 +1281,26 @@ async def _dispatch(adapter, message, route) -> None:
     if route.intent == "calendar":
         _fire(_run_calendar(message, route))
         return
+    if route.intent == "email":
+        _fire(_run_email(message, route))
+        return
+    if route.intent == "crm":
+        _fire(_run_crm(message, route))
+        return
     if route.intent == "self_config":
         _fire(_run_self_config(message, route))
+        return
+    if route.intent == "time_date":
+        _fire(_run_time_date(message, route))
         return
     if route.intent == "goal":
         _fire(_run_goal(message, route))
         return
     if route.intent == "health_query":
         _fire(_run_health(message, route))
+        return
+    if route.intent == "marathon_training":
+        _fire(_run_marathon_training_async(message, route))
         return
     if route.intent == "proactive":
         if route.params.get("action") == "status":

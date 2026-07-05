@@ -156,5 +156,50 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(router.classify("find 10 clinics in Pune").intent, "lead")
 
 
+class TestTimeDateIntent(unittest.TestCase):
+    """Time/date queries must route to time_date, NEVER to conversational."""
+
+    def test_what_time_is_it(self):
+        r = router.classify("what time is it")
+        self.assertIsNotNone(r)
+        self.assertEqual(r.intent, "time_date")
+
+    def test_what_is_the_time(self):
+        r = router.classify("what's the time")
+        self.assertEqual(r.intent, "time_date")
+
+    def test_current_time(self):
+        r = router.classify("current time")
+        self.assertEqual(r.intent, "time_date")
+
+    def test_what_day_is_it(self):
+        r = router.classify("what day is it")
+        self.assertEqual(r.intent, "time_date")
+
+    def test_what_is_todays_date(self):
+        r = router.classify("what's today's date")
+        self.assertEqual(r.intent, "time_date")
+
+    def test_tell_me_the_time(self):
+        r = router.classify("tell me the time")
+        self.assertEqual(r.intent, "time_date")
+
+    def test_time_does_not_match_conversational(self):
+        # Previously these fell through to conversational → LLM fabricated the time
+        for phrase in ("what time is it", "what's the time", "what day is it today"):
+            r = router.classify(phrase)
+            self.assertNotEqual(r.intent, "conversational", f"{phrase!r} must not be conversational")
+
+    def test_time_date_has_text_param(self):
+        r = router.classify("what time is it")
+        self.assertIn("text", r.params)
+
+    def test_what_day_today(self):
+        r = router.classify("what day today")
+        # This should NOT match time_date (not specific enough) — conversational OK
+        # Just verify it doesn't crash
+        self.assertIsNotNone(r)
+
+
 if __name__ == "__main__":
     unittest.main()

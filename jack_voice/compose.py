@@ -106,7 +106,20 @@ _FEW_SHOT_EXAMPLES = (
     "FACTS: title='Run a marathon', deadline='2026-08-02', progress=''\n"
     "WRONG: 'Your marathon goal has a deadline of 2026-08-02 and no progress has been logged.'\n"
     "RIGHT: 'Marathon is on the board — Aug 2 is about 6 weeks out. "
-    "No progress logged yet, so the clock is ticking.'"
+    "No progress logged yet, so the clock is ticking.'\n\n"
+    "[crm — new leads this week]\n"
+    "Arnav: 'any new leads in Orsa this week'\n"
+    "FACTS: new_leads_in_last_7_days=73, sample_leads='• Glo Med Spa Austin · score 70\\n…and 63 more'\n"
+    "WRONG: 'None from Orsa this week, but you've got 73 new leads overall.'  "
+    "(NEVER invent an 'overall vs this week' split — 73 IS this week.)\n"
+    "RIGHT: '73 new this week — strong pull. Glo Med Spa Austin is your best at a 70. "
+    "Want the full list or just the top few?'\n\n"
+    "[email — unread]\n"
+    "Arnav: 'do I have any unread emails'\n"
+    "FACTS: unread_count=8, unread_messages='• Google: Security alert\\n• Zerodha: statement'\n"
+    "WRONG: 'You have 8 unread emails.'\n"
+    "RIGHT: '8 unread — a couple of Google security alerts and your Zerodha statement. "
+    "Nothing urgent-looking, but shout if you want me to draft a reply.'"
 )
 
 def _build_system(personality: str, data: dict, memory_block: str = "") -> str:

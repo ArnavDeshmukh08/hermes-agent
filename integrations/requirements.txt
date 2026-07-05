@@ -5,5 +5,13 @@
 # of Jack run fine without them installed (features just no-op when absent).
 
 garminconnect            # Garmin Connect sleep/activity (GARMIN_EMAIL/GARMIN_PASSWORD)
-google-api-python-client # Google Calendar v3 (service-account auth)
-google-auth              # service-account credentials loader
+google-api-python-client # Google Calendar + Gmail v1 (OAuth + service-account)
+google-auth              # credentials loader (OAuth user creds + service account)
+google-auth-oauthlib     # one-time OAuth installed-app consent (bin/jack_google_auth.py)
+# Orsa CRM uses the stdlib sqlite3 (read-only) — no extra dep.
+# Apollo.io enrichment uses `requests` (already used by other integrations).
+#
+# Split-brain (Option A): the Google OAuth token and the Orsa DB live on the Mac. The
+# MAC runs mac_services/jack_google_service.py and needs the three google-* libs above.
+# The VPS gateway sets JACK_GOOGLE_REMOTE=1 and only needs `requests` — it talks to the
+# Mac service over Tailscale (integrations/mac_remote.py) and does NOT need the google libs.

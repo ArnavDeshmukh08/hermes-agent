@@ -12,6 +12,7 @@ string to ProactiveReasoner.reason(context_str) which calls the Mac LLM.
 """
 
 from __future__ import annotations
+import fcntl
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any, Optional
 from proactive.scorer import ProactiveItem, P1, P2, P3, SCORE_P1, SCORE_P2, SCORE_P3
 
@@ -205,6 +207,123 @@ def gather_context(
         _logger.warning("gather_context: goals fetch failed: %s: %s", type(exc).__name__, exc)
         goals_text = ""
 
+    # --- intraday health snapshot (from health_today.json written by Agent A) ---
+    health_snapshot_text: str = ""
+    try:
+        health_path = Path.home() / ".hermes" / "health_today.json"
+        if not health_path.exists():
+            health_snapshot_text = "No intraday health snapshot available yet."
+        else:
+            with health_path.open("r", encoding="utf-8") as _hf:
+                fcntl.flock(_hf, fcntl.LOCK_SH)
+                try:
+                    _raw = _hf.read()
+                finally:
+                    fcntl.flock(_hf, fcntl.LOCK_UN)
+            _hdata = json.loads(_raw)
+
+            is_stale: bool = bool(_hdata.get("is_stale", False))
+            fetched_at_str: str = _hdata.get("fetched_at_utc", "")
+            stats: dict = _hdata.get("stats") or {}
+            sleep_d: dict = _hdata.get("sleep") or {}
+            runs_today = _hdata.get("runs_today")
+            runs_available: bool = bool(_hdata.get("runs_available", False))
+            hourly_steps: list = _hdata.get("hourly_steps") or []
+
+            steps = stats.get("steps", "?")
+            body_battery = stats.get("body_battery_high", "?")
+            calories = stats.get("calories", "?")
+            stress_avg = stats.get("stress_avg", "?")
+            total_sleep_h = sleep_d.get("total_sleep_h", "?")
+            sleep_score = sleep_d.get("score", "?")
+
+            # Compute sedentary streak: consecutive trailing hours with <500 step delta
+            sedentary_streak: int = 0
+            if hourly_steps:
+                step_values = [
+                    h.get("steps", 0) if isinstance(h, dict) else int(h)
+                    for h in hourly_steps
+                ]
+                deltas = [max(0, step_values[i] - step_values[i - 1]) for i in range(1, len(step_values))]
+                streak = 0
+                for delta in reversed(deltas):
+                    if delta < 500:
+                        streak += 1
+                    else:
+                        break
+                sedentary_streak = streak
+
+            # Parse fetch time to IST for display
+            fetch_time_ist = ""
+            if fetched_at_str:
+                try:
+                    _ft = datetime.fromisoformat(fetched_at_str.replace("Z", "+00:00"))
+                    _ft_ist = _ft.astimezone(_IST)
+                    fetch_time_ist = _ft_ist.strftime("%H:%M")
+                except Exception:
+                    fetch_time_ist = ""
+
+            time_label = f"as of {fetch_time_ist} IST" if fetch_time_ist else "latest available"
+
+            stale_note = ""
+            if is_stale:
+                stale_note = "\n[Note: Health data is stale / Mac unreachable]"
+
+            health_snapshot_text = (
+                f"# Intraday Health Snapshot (from Garmin, {time_label})\n"
+                f"Steps today: {steps} | Body battery: {body_battery} | Calories: {calories}\n"
+                f"Stress: {stress_avg} | Sleep last night: {total_sleep_h}h (score {sleep_score})\n"
+                f"Run data available: {runs_available} | Runs logged today: {runs_today}\n"
+                f"Sedentary streak: {sedentary_streak} consecutive hours with <500 step increase"
+                f"{stale_note}"
+            )
+    except Exception as exc:
+        _logger.warning("gather_context: health_today.json load failed: %s: %s", type(exc).__name__, exc)
+        health_snapshot_text = "No intraday health snapshot available yet."
+
+    # --- multi-day run history (from health_history.json written by garmin_poller) ---
+    run_history_text: str = ""
+    try:
+        hist_path = Path.home() / ".hermes" / "health_history.json"
+        if hist_path.exists():
+            with hist_path.open("r", encoding="utf-8") as _hf:
+                fcntl.flock(_hf, fcntl.LOCK_SH)
+                try:
+                    _raw_hist = _hf.read()
+                finally:
+                    fcntl.flock(_hf, fcntl.LOCK_UN)
+            _history = json.loads(_raw_hist)
+
+            if isinstance(_history, list) and _history:
+                try:
+                    from integrations.garmin_poller import days_since_last_run as _days_since, runs_this_week as _runs_week
+                    _dsrl = _days_since(_history)
+                    _rtw = _runs_week(_history)
+
+                    if _dsrl is None:
+                        streak_text = "No run found in history"
+                    elif _dsrl == 0:
+                        streak_text = "Ran today"
+                    elif _dsrl == 1:
+                        streak_text = "Last run was yesterday"
+                    else:
+                        streak_text = f"No run logged in {_dsrl} days"
+
+                    run_history_text = (
+                        f"# Run History (last 14 days)\n"
+                        f"Runs this week: {_rtw} | {streak_text}\n"
+                        f"History entries: {len(_history)} days tracked"
+                    )
+                except ImportError:
+                    run_history_text = "Run history available but helpers not importable yet."
+            else:
+                run_history_text = "No run history available yet."
+        else:
+            run_history_text = "No run history available yet."
+    except Exception as _exc:
+        _logger.warning("gather_context: health_history.json load failed: %s: %s", type(_exc).__name__, _exc)
+        run_history_text = ""
+
     # --- time context ---
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -243,6 +362,10 @@ def gather_context(
 #  actual data where available. Reflect his plan back — never invent prescriptions.)
 {goals_section}
 
+{health_snapshot_text}
+
+{run_history_text}
+
 # Already surfaced today
 {already_lines}
 
@@ -257,6 +380,23 @@ Before you answer, silently evaluate EACH domain below in order. Do not skip any
 3. CALENDAR — Is there an event starting in the NEXT 2 HOURS that needs prep, travel, or a heads-up? Events more than 2 hours away MUST NOT be surfaced. Do not surface routine/recurring events the user clearly already knows about unless prep is actually required.
 4. HEALTH — Is there a health-relevant action (sleep, hydration, a missed habit) that is timely right now and not nagging?
 5. GOALS_TRACKING — For each active goal listed above, compare Arnav's stated plan to actual data (if available). Surface ONLY if: (a) there is a real measurable deviation from HIS OWN stated plan, (b) a scheduled check-in is genuinely due today, or (c) there is honest, specific encouragement to give (not generic). CRITICAL FRAMING RULE: You are a tracking mirror, not a coach. Reflect his plan back to him — NEVER invent training schedules, dietary advice, medical prescriptions, pacing targets, or recovery protocols. If no plan was stated, do NOT surface this goal unless Arnav explicitly asks. Bias to silence: a goal on track needs no nudge.
+   MARATHON AWARENESS: For the "Run a marathon" goal (deadline Aug 2, ~5 weeks from late June 2026):
+   - Use the intraday health snapshot AND the run history above to assess training adherence
+   - If health data is unavailable: say so honestly, do not fabricate activity data
+   - If sedentary streak > 2 hours AND it is after 14:00 IST AND no run is logged today:
+     reflect this with warmth — e.g. "Aug 2 is ~5 weeks out, today has been quiet so far"
+   - Run history analysis (from "# Run History" section above):
+     * If "No run logged in N days" AND N >= 3 AND deadline is within 6 weeks: reflect the gap
+       (e.g. "Aug 2 is ~5 weeks out, and you haven't logged a run in 3 days")
+     * If runs_this_week <= 1 AND it is Friday/Saturday/Sunday: reflect the weekly count
+       (e.g. "Your week has 1 run logged so far — Aug 2 is getting closer")
+     * If runs_this_week >= 3: light encouragement if warranted
+     * If run data is null (Mac unreachable): say data is unavailable — never fabricate
+   - If a run IS logged today (Runs logged today is not null/None): give honest encouragement
+   - If steps today > 8000: note good activity even if no explicit run data is available
+   - Deadline math: compute weeks remaining from today's date to 2026-08-02
+   - FRAMING RULE is absolute: NEVER prescribe a training schedule, pacing targets, diet,
+     or recovery protocol. You are a mirror, not a coach.
 6. DEFAULT — If none of the above produced a concrete, timely, actionable reason, return an EMPTY list. This is the expected outcome for most cycles.
 
 Decision rules:

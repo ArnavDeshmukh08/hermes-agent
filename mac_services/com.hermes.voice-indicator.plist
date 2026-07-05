@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.voice-indicator</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/anaconda3/bin/python</string>
+    <string>/Users/arnav/Documents/Hermes Agent/mac_services/voice_indicator.py</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/arnav/Documents/Hermes Agent</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/jack-voice-indicator.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/jack-voice-indicator-error.log</string>
+</dict>
+</plist>

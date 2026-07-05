@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.jack-google</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/anaconda3/bin/python3</string>
+    <string>/Users/arnav/Documents/Hermes Agent/mac_services/jack_google_service.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Set a shared secret here AND in the VPS .env (JACK_MAC_SERVICE_TOKEN) to
+         require X-Jack-Token on every request. Leave empty to run open on Tailscale. -->
+    <key>JACK_MAC_SERVICE_TOKEN</key>
+    <string></string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/arnav/Documents/Hermes Agent</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/jack-google-service.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/jack-google-service-error.log</string>
+</dict>
+</plist>

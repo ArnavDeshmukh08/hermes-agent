@@ -14,6 +14,7 @@ Endpoints:
   GET /sleep?date=YYYY-MM-DD
   GET /stats?date=YYYY-MM-DD
   GET /daily_summary
+  GET /workouts?days=N   (default N=7, max N=30)
 """
 
 import datetime
@@ -164,6 +165,36 @@ def _parse_sleep(raw: dict) -> dict:
     return result
 
 
+def _parse_days_param(params: dict, key: str = "days", default: int = 7, max_val: int = 30) -> int:
+    """Parse an integer query-param with a default and a max cap."""
+    try:
+        v = int(params.get(key, default))
+        return max(1, min(v, max_val))
+    except (ValueError, TypeError):
+        return default
+
+
+def _parse_workouts(raw_activities: list) -> list:
+    """Parse garminconnect activity list into clean workout dicts."""
+    result = []
+    for act in raw_activities or []:
+        if not isinstance(act, dict):
+            continue
+        distance_m = act.get("distance") or 0
+        speed = act.get("averageSpeed") or 0
+        pace = round((1000 / speed) / 60, 2) if speed > 0 else None
+        result.append({
+            "activity_id": act.get("activityId"),
+            "activity_name": act.get("activityName", ""),
+            "start_time_local": act.get("startTimeLocal", ""),
+            "distance_km": round(distance_m / 1000, 2),
+            "duration_s": int(act.get("duration") or 0),
+            "avg_pace_min_km": pace,
+            "is_run": True,
+        })
+    return result
+
+
 def _parse_stats(raw: dict) -> dict:
     if not raw:
         return {"error": "no_data"}
@@ -260,6 +291,28 @@ if _USE_FLASK:
 
         return jsonify({"date": date, "sleep": sleep_data, "stats": stats_data})
 
+    @app.route("/workouts")
+    def workouts_endpoint():
+        days = _parse_days_param(request.args)
+        end_date = _today_ist()
+        start_date = (
+            datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            - datetime.timedelta(days=days - 1)
+        ).strftime("%Y-%m-%d")
+        try:
+            raw = _call_garmin(
+                lambda c, start, end: c.get_activities_by_date(start, end, activitytype="running"),
+                start_date,
+                end_date,
+            )
+            workouts = _parse_workouts(raw or [])
+            return jsonify({"workouts": workouts, "count": len(workouts)})
+        except RuntimeError:
+            return jsonify({"error": "garmin_unavailable"}), 503
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"level": "error", "msg": "workouts handler error", "error": str(exc)}))
+            return jsonify({"error": "garmin_unavailable"}), 503
+
     def run_server():
         print(json.dumps({"level": "info", "msg": f"Starting Flask server on 0.0.0.0:{PORT}"}))
         app.run(host="0.0.0.0", port=PORT)
@@ -329,6 +382,25 @@ else:
                     stats_data = None
 
                 _json_response(self, {"date": date, "sleep": sleep_data, "stats": stats_data})
+
+            elif path == "/workouts":
+                days = _parse_days_param(params)
+                end_date = _today_ist()
+                start_date = (
+                    datetime.datetime.strptime(end_date, "%Y-%m-%d")
+                    - datetime.timedelta(days=days - 1)
+                ).strftime("%Y-%m-%d")
+                try:
+                    raw = _call_garmin(
+                        lambda c, start, end: c.get_activities_by_date(start, end, activitytype="running"),
+                        start_date,
+                        end_date,
+                    )
+                    workouts = _parse_workouts(raw or [])
+                    _json_response(self, {"workouts": workouts, "count": len(workouts)})
+                except Exception as exc:  # noqa: BLE001
+                    print(json.dumps({"level": "error", "msg": "workouts error", "error": str(exc)}))
+                    _json_response(self, {"error": "garmin_unavailable"}, 503)
 
             else:
                 _json_response(self, {"error": "not_found"}, 404)

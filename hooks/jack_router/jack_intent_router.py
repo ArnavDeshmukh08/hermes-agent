@@ -110,6 +110,66 @@ _CALENDAR_LIST_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Email (Gmail) intents. Checked AFTER reminder so "remind me to reply to X" is a
+# reminder, and BEFORE outreach/lead. Two actions: draft (create a reply draft) and
+# list (surface unread mail). A mail noun is required so ordinary chat stays out.
+# ---------------------------------------------------------------------------
+_EMAIL_DRAFT_RE = re.compile(
+    r"\b(?:"
+    r"draft\s+(?:a\s+|an\s+)?(?:reply|response|answer|e-?mail)\b|"
+    r"(?:write|compose)\s+(?:a\s+|an\s+)?(?:reply|response)\b|"
+    r"reply\s+to\b[^.!?]*\b(?:e-?mail|message|mail)\b|"
+    r"reply\s+to\s+(?:the\s+|that\s+|his\s+|her\s+|their\s+)?(?:e-?mail|message|mail)\b|"
+    r"respond\s+to\b[^.!?]*\b(?:e-?mail|message|mail)\b"
+    r")",
+    re.IGNORECASE,
+)
+# Requires a genuine inbox-reading signal — "inbox", "unread", an inbox verb + mail
+# noun, or an any/new/business qualifier directly on "email". This deliberately does
+# NOT fire on a bare "email" (so "cold email for row 8" → outreach, "email signature"
+# → conversational).
+_EMAIL_LIST_RE = re.compile(
+    r"\b(?:"
+    r"inbox\b|"
+    r"unread\b[^.!?]*\b(?:e-?mail|mail|messages?)\b|"
+    r"(?:check|read|show|see|list|any|got|do\s+i\s+have)\b[^.!?]*\b(?:e-?mail|inbox|mail)\b|"
+    r"(?:any|new|unread|business)\s+(?:business\s+)?e-?mails?\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# CRM (Orsa) read intents. Checked BEFORE lead/outreach so "get new leads in Orsa"
+# READS the CRM instead of kicking off a scrape. A scrape needs a scrape-verb + noun
+# (handled by the lead branch); these read-queries are gated on Orsa/CRM/pipeline
+# context or a leads-query verb that is NOT a scrape verb.
+# ---------------------------------------------------------------------------
+_CRM_RE = re.compile(
+    r"\b(?:"
+    r"orsa\b|"
+    r"\bcrm\b|"
+    r"(?:new\s+)?leads?\b[^.!?]*\b(?:this\s+week|today|recently|so\s+far|"
+    r"in\s+orsa|in\s+the\s+crm|in\s+the\s+pipeline)\b|"
+    r"(?:how\s+many|show|list|any|got\s+any)\b[^.!?]*\bleads?\b|"
+    r"pipeline\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# CRM WRITE attempt — a request to CREATE/GENERATE/ADD leads *into Orsa*. Jack is
+# read-only on Orsa, so this must NOT silently run a scrape (which writes elsewhere, not
+# Orsa) and must NOT fall through to the chat brain (which over-promises). Checked BEFORE
+# the CRM-read and lead-scrape branches. Only unambiguous create verbs count — read verbs
+# ("show/how many/any new leads in orsa") still route to the CRM read branch.
+_CRM_WRITE_VERBS = r"(?:generate|create|add|make|insert|import|build|sync|scrape|populate)"
+_CRM_WRITE_RE = re.compile(
+    rf"\b{_CRM_WRITE_VERBS}\b[^.!?]*\bleads?\b[^.!?]*\b(?:in|into|to|for)\s+(?:the\s+)?(?:orsa|crm)\b"
+    rf"|\b(?:orsa|crm)\b[^.!?]*\b{_CRM_WRITE_VERBS}\b[^.!?]*\bleads?\b"
+    rf"|\b{_CRM_WRITE_VERBS}\b[^.!?]*\b(?:orsa|crm)\b[^.!?]*\bleads?\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
 # Proactive control intents. Checked AFTER self_config and BEFORE conversational.
 # ---------------------------------------------------------------------------
 _PROACTIVE_CONTROL_RE = re.compile(
@@ -179,6 +239,24 @@ _SELF_GENERIC_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Time / date intents. Matched BEFORE goal and conversational so "what time
+# is it?" never reaches the LLM and can never be fabricated from memory.
+# ---------------------------------------------------------------------------
+_TIME_DATE_RE = re.compile(
+    r"\b(?:"
+    r"what(?:'?s)?\s+(?:the\s+)?time\b|"
+    r"what\s+time\s+is\s+it\b|"
+    r"current\s+time\b|"
+    r"tell\s+me\s+the\s+time\b|"
+    r"what(?:'?s)?\s+(?:today'?s?\s+)?date\b|"
+    r"what\s+day\s+is\s+it\b|"
+    r"what\s+day\s+(?:is\s+)?today\b|"
+    r"today'?s?\s+date\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
 # Health / Garmin intents. Checked AFTER proactive and BEFORE goal intents.
 # Requires explicit health/device noun to avoid false positives.
 # ---------------------------------------------------------------------------
@@ -224,6 +302,33 @@ _GOAL_QUERY_RE = re.compile(
     r"am\s+i\s+on\s+track\b|"
     # "my goals" — plural only to avoid snagging "my goal is ..." (create phrasing)
     r"my\s+goals\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Marathon training intent. Checked AFTER health_query and BEFORE goal_query
+# so "how's my marathon training" is a specific training check-in, not a
+# generic goal query. Requires explicit marathon/training/running context
+# to avoid false positives on ordinary chat.
+# ---------------------------------------------------------------------------
+_MARATHON_TRAINING_RE = re.compile(
+    r"\b(?:"
+    # "how's my marathon/running/training" OR "how is my marathon/running/training"
+    r"how(?:'?s|\s+is)\s+my\s+(?:marathon|running|training)\b|"
+    # "marathon progress/status/update" — marathon-specific only (not bare "running progress"
+    # which is ambiguous with goal-creation phrasing like "track my running progress").
+    r"marathon\s+(?:progress|status|update)\b|"
+    # "training update/status" — training-specific
+    r"training\s+(?:status|update)\b|"
+    # "am I on track / ready for the marathon"
+    r"am\s+i\s+(?:on\s+track|ready)\s+for\s+(?:the\s+)?marathon\b|"
+    # "how am I doing for the marathon" / "how is my training for the marathon"
+    r"how\s+am\s+i\s+doing\s+for\s+(?:the\s+)?marathon\b|"
+    r"how\s+is\s+my\s+training\s+for\s+(?:the\s+)?marathon\b|"
+    # explicit check-in phrases
+    r"marathon\s+check[\s-]?in\b|"
+    r"training\s+check[\s-]?in\b"
     r")",
     re.IGNORECASE,
 )
@@ -286,7 +391,7 @@ def _reminder_action(t: str) -> str | None:
 
 @dataclass(frozen=True)
 class Route:
-    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "self_config" | "proactive" | "health_query" | "goal" | "conversational"
+    intent: str  # "lead" | "status" | "outreach" | "reminder" | "complaint" | "calendar" | "email" | "crm" | "self_config" | "proactive" | "health_query" | "marathon_training" | "goal" | "time_date" | "conversational"
     params: dict = field(default_factory=dict)
 
 
@@ -315,6 +420,19 @@ def classify(text: str) -> Route | None:
     action = _reminder_action(t)
     if action is not None:
         return Route("reminder", {"action": action, "text": t})
+    # Email branch — after reminder ("remind me to reply to X" stays a reminder),
+    # before outreach/lead. Draft checked before list so "draft a reply" wins.
+    if _EMAIL_DRAFT_RE.search(t):
+        return Route("email", {"action": "draft", "text": t})
+    if _EMAIL_LIST_RE.search(t):
+        return Route("email", {"action": "list", "text": t})
+    # CRM (Orsa) write attempt — honest read-only notice, checked before read + lead so
+    # "generate/add leads in Orsa" never scrapes or over-promises.
+    if _CRM_WRITE_RE.search(t):
+        return Route("crm", {"action": "readonly_notice", "text": t})
+    # CRM (Orsa) read branch — before lead/outreach so an Orsa read never scrapes.
+    if _CRM_RE.search(t):
+        return Route("crm", {"action": "query", "text": t})
     if _OUTREACH_RE.search(t):
         params = {}
         mr = _ROW_RE.search(t)
@@ -337,9 +455,16 @@ def classify(text: str) -> Route | None:
         return Route("proactive", {"action": "status", "text": t})
     if _PROACTIVE_CONTROL_RE.search(t):
         return Route("proactive", {"action": "control", "control": _proactive_control_value(t), "text": t})
+    # Time / date — answered from system clock, never from LLM.
+    if _TIME_DATE_RE.search(t):
+        return Route("time_date", {"text": t})
     # Health / Garmin branch — after proactive intents, before goal intents.
     if _HEALTH_QUERY_RE.search(t):
         return Route("health_query", {"text": t})
+    # Marathon training check-in — specific sub-intent before generic goal query.
+    # "how's my marathon training" is a structured data pull, not a generic goal list.
+    if _MARATHON_TRAINING_RE.search(t):
+        return Route("marathon_training", {"text": t})
     # Goal branch — after all other operational intents, before conversational.
     # Query checked first (read-only, harmless false-positive), then update
     # (requires explicit verb + "goal"), then create (broadest).

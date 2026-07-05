@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jack Garmin health snapshot poller every hour
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60min
+Unit=jack-garmin-poll.service
+
+[Install]
+WantedBy=timers.target
